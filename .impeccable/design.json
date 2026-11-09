@@ -1,0 +1,172 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-09T00:00:00.000Z",
+  "title": "Design System: Water Interval",
+  "extensions": {
+    "colorMeta": {
+      "deep-water": {
+        "role": "primary",
+        "displayName": "Deep Water",
+        "canonical": "#0a2635",
+        "tonalRamp": [
+          "#031016",
+          "#061923",
+          "#0a2635",
+          "#15394a",
+          "#31576a",
+          "#5c8292",
+          "#97b3be",
+          "#dce8eb"
+        ]
+      },
+      "warm-light": {
+        "role": "secondary",
+        "displayName": "Warm Light",
+        "canonical": "#e8a27e",
+        "tonalRamp": [
+          "#32190e",
+          "#542b19",
+          "#814527",
+          "#b56d4a",
+          "#e8a27e",
+          "#efbba1",
+          "#f6d4c5",
+          "#fcf0e9"
+        ]
+      },
+      "moonlight": {
+        "role": "tertiary",
+        "displayName": "Moonlight",
+        "canonical": "#d5e2ea",
+        "tonalRamp": [
+          "#111c24",
+          "#233542",
+          "#3e5361",
+          "#607887",
+          "#8da4af",
+          "#b4c6ce",
+          "#d5e2ea",
+          "#f3f7f8"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Warm Paper",
+        "canonical": "#f3f0e7",
+        "tonalRamp": [
+          "#20201c",
+          "#3b3a34",
+          "#5b5950",
+          "#807d72",
+          "#aaa69a",
+          "#cbc7bb",
+          "#e5e1d6",
+          "#f3f0e7"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#172b34",
+        "tonalRamp": [
+          "#061115",
+          "#0c1a20",
+          "#172b34",
+          "#29424c",
+          "#49646e",
+          "#718891",
+          "#a7b8bd",
+          "#e2e8e9"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Scene Display",
+        "purpose": "Primary Thai headline over the landscape."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Supporting copy and editor form labels."
+      },
+      "label": {
+        "displayName": "Utility Label",
+        "purpose": "Small Info and editor controls."
+      }
+    },
+    "shadows": [
+      {
+        "name": "editor-panel",
+        "value": "-24px 0 70px rgba(4, 16, 23, .22)",
+        "purpose": "Separate the editor panel from the landscape."
+      }
+    ],
+    "motion": [
+      {
+        "name": "scene-time",
+        "value": "Scroll progress moves light from 04:00 through the following 04:00 and sends a wind gust through the standing wave field; it does not add impact rings. Idle timers also schedule natural events.",
+        "purpose": "Let the visitor scrub one day of changing light while scroll wind and independently timed events animate the lake."
+      },
+      {
+        "name": "editor-slide",
+        "value": "420ms cubic-bezier(.2, .78, .22, 1)",
+        "purpose": "Open and close the browser-local editor."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "mobile",
+        "value": "700px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Save Scene",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Save edited scene settings in this browser.",
+      "html": "<button class=\"ds-save\">บันทึกฉาก</button>",
+      "css": ".ds-save { min-height: 43px; padding: 0 16px; border: 1px solid #172b34; background: #172b34; color: #f3f0e7; font: 12px 'Noto Sans Thai', sans-serif; cursor: pointer; transition: background .2s ease; } .ds-save:hover { background: #2a454f; } .ds-save:focus-visible { outline: 2px solid #e2a26f; outline-offset: 4px; }"
+    },
+    {
+      "name": "Scene Editor Field",
+      "kind": "input",
+      "description": "Text and subject controls in the editor panel.",
+      "html": "<label class=\"ds-field\">ชื่อฉาก<input value=\"เหนือผืนน้ำ\" /></label>",
+      "css": ".ds-field { display: flex; flex-direction: column; gap: 7px; color: #293e45; font: 12px 'Noto Sans Thai', sans-serif; } .ds-field input { width: 100%; padding: 11px 12px; border: 1px solid rgba(25,46,53,.22); border-radius: 0; background: rgba(255,255,255,.32); color: #172b34; font: 14px/1.55 'Noto Sans Thai', sans-serif; } .ds-field input:focus-visible { outline: 2px solid #e2a26f; outline-offset: 3px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "A Day Passing Over Water",
+    "overview": "One Japanese lakeside scene carries time from dawn to night. The lake keeps low, continuous swells; scroll wind strengthens those waves without adding impact rings. Weather gathers and fades in patches, while occasional animals and seasonal events disturb the water.",
+    "keyCharacteristics": [
+      "One continuous scene instead of a slide sequence",
+      "A moving reflective lake with low swells and localized impact ripples",
+      "Scroll drives a wind gust through the wave field without creating circular impacts",
+      "Idle timers bring weather, wildlife, seasons, and rare sky events"
+    ],
+    "rules": [
+      {
+        "name": "One Scene Rule",
+        "body": "Scroll progress changes the lighting continuously across the same scene.",
+        "section": "layout"
+      },
+      {
+        "name": "Water Surface Rule",
+        "body": "Keep low swells in continuous motion; let scroll add wind through the wave field without impact rings, and map pointer or natural impacts into lake coordinates.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Keep the torii visually grounded at the lake surface.",
+      "Keep long swells moving while reserving local rings for pointer contact and natural impacts.",
+      "Let scroll progress change lighting and send a gust through the same wave field."
+    ],
+    "donts": [
+      "Don't use horizontal slide transitions between scenes.",
+      "Don't mirror the full screen to fake a water reflection.",
+      "Don't replace moving water with a static decorative pattern."
+    ]
+  }
+}
