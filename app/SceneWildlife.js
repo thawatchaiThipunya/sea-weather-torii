@@ -343,23 +343,21 @@ export default function SceneWildlife({ horizon, subject, pass }) {
               const approach = THREE.MathUtils.clamp(phase / 10.5, 0, 1);
               const landing = ease((phase - 8.5) / 3.5);
               const takeoff = ease((phase - 55) / 6);
-              const walk = ease((phase - 20) / 3) * (1 - ease((phase - 42) / 3));
+              const walk = ease((phase - 20) / 2) * (1 - ease((phase - 43) / 2));
               shown = phase < 64;
               bird.visible = shown;
               if (!shown) return;
               visibility = Math.min(ease(phase / 0.8), ease((64 - phase) / 1.2));
-              const walkX = 0.49 + direction * 0.045 * ease((phase - 20) / 24);
-              const restX = 0.5 + Math.sin(phase * 0.42) * 0.004;
-              const landedX = THREE.MathUtils.lerp(restX, walkX, walk);
+              const perchX = 0.5 + direction * 0.035 * ease((phase - 20) / 24) + Math.sin(phase * 0.42) * 0.003;
               if (phase < 12) {
                 x = THREE.MathUtils.lerp(startX, 0.5, approach);
                 y = THREE.MathUtils.lerp(flyY - Math.sin(approach * Math.PI) * 0.025, bodyY, landing);
               } else if (phase < 55) {
-                x = landedX;
+                x = perchX;
                 const footfall = Math.abs(Math.sin((phase - 20) * 3.2));
                 y = bodyY - footfall * walk * 0.004;
               } else {
-                x = THREE.MathUtils.lerp(walkX, exitX, takeoff);
+                x = THREE.MathUtils.lerp(perchX, exitX, takeoff);
                 y = THREE.MathUtils.lerp(bodyY, flyY - 0.05, takeoff) - Math.sin(takeoff * Math.PI) * 0.035;
               }
               const settlingFlap = (1 - landing) * Math.sin(phase * 11) * 0.78;
@@ -378,8 +376,7 @@ export default function SceneWildlife({ horizon, subject, pass }) {
               shown = flightAge >= 0 && flightAge < flightDuration;
               bird.visible = shown;
               if (!shown) return;
-              const progress = THREE.MathUtils.clamp(flightAge / 10, 0, 1);
-              const path = ease(progress);
+              const path = THREE.MathUtils.clamp(flightAge / 10.5, 0, 1);
               const fromX = direction > 0 ? -0.16 : 1.16;
               const toX = direction > 0 ? 1.16 : -0.16;
               x = THREE.MathUtils.lerp(fromX, toX, path);
