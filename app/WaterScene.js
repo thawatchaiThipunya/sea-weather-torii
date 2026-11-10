@@ -940,6 +940,7 @@ export default function WaterScene({ subject, previewEvent = null }) {
     let imageReady = false;
     let inView = true;
     let pageVisible = !document.hidden;
+    let disposed = false;
     let canvasWidth = 0;
     let canvasHeight = 0;
     let waveCalmUntil = -Infinity;
@@ -957,7 +958,7 @@ export default function WaterScene({ subject, previewEvent = null }) {
     let appliedPreviewToken = null;
 
     function canDraw() {
-      return inView && pageVisible;
+      return !disposed && inView && pageVisible;
     }
 
     function scheduleDraw() {
@@ -1298,6 +1299,7 @@ export default function WaterScene({ subject, previewEvent = null }) {
     scheduleDraw();
 
     return () => {
+      disposed = true;
       cancelAnimationFrame(frame);
       intersectionObserver?.disconnect();
       resizeObserver?.disconnect();
