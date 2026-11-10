@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 
 function disposeScene(root) {
   const geometries = new Set();
@@ -141,6 +142,104 @@ function makeFish(source) {
   return root;
 }
 
+function makeDolphin(source) {
+  const model = source.clone(true);
+  const bounds = new THREE.Box3().setFromObject(model);
+  const center = bounds.getCenter(new THREE.Vector3());
+  const size = bounds.getSize(new THREE.Vector3());
+  model.position.sub(center);
+  const shaders = [];
+  const materials = [];
+
+  model.traverse((object) => {
+    if (!object.isMesh) return;
+    const cloneMaterial = (sourceMaterial) => {
+      const material = sourceMaterial.clone();
+      materials.push(material);
+      material.transparent = true;
+      material.depthWrite = false;
+      material.onBeforeCompile = (shader) => {
+        shader.uniforms.uDolphinTime = { value: 0 };
+        shader.vertexShader = shader.vertexShader
+          .replace("#include <common>", "#include <common>\nuniform float uDolphinTime;")
+          .replace("#include <begin_vertex>", `
+            #include <begin_vertex>
+            float tailWeight = 1.0 - smoothstep(-1.48, -0.72, position.x);
+            transformed.z += sin(uDolphinTime * 4.7 + position.x * 2.0) * 0.15 * tailWeight;
+            transformed.y += cos(uDolphinTime * 4.7 + position.x * 2.0) * 0.025 * tailWeight;
+          `);
+        shaders.push(shader);
+      };
+      material.customProgramCacheKey = () => "bottlenose-tail-sway-v1";
+      return material;
+    };
+    object.material = Array.isArray(object.material)
+      ? object.material.map(cloneMaterial)
+      : cloneMaterial(object.material);
+  });
+
+  const root = new THREE.Group();
+  root.add(model);
+  root.userData.modelSize = size;
+  root.userData.dolphinMaterials = materials;
+  root.userData.setDolphinTime = (time) => shaders.forEach((shader) => {
+    shader.uniforms.uDolphinTime.value = time;
+  });
+  root.visible = false;
+  return root;
+}
+
+function makeSakuraPetalGeometry() {
+  const shape = new THREE.Shape();
+  shape.moveTo(0, -0.48);
+  shape.bezierCurveTo(-0.17, -0.38, -0.35, -0.10, -0.31, 0.17);
+  shape.bezierCurveTo(-0.28, 0.38, -0.11, 0.48, -0.025, 0.42);
+  shape.quadraticCurveTo(0, 0.34, 0.025, 0.42);
+  shape.bezierCurveTo(0.11, 0.48, 0.28, 0.38, 0.31, 0.17);
+  shape.bezierCurveTo(0.35, -0.10, 0.17, -0.38, 0, -0.48);
+
+  const geometry = new THREE.ShapeGeometry(shape, 10);
+  const positions = geometry.getAttribute("position");
+  const colors = [];
+  const centerColor = new THREE.Color("#fff0f2");
+  const edgeColor = new THREE.Color("#dc7f9c");
+  for (let index = 0; index < positions.count; index += 1) {
+    const x = positions.getX(index);
+    const y = positions.getY(index);
+    const edge = THREE.MathUtils.clamp(Math.max(Math.abs(x) / 0.32, (Math.abs(y) + Math.abs(x) * 0.25) / 0.50), 0, 1);
+    const color = centerColor.clone().lerp(edgeColor, THREE.MathUtils.smoothstep(edge, 0.34, 0.96));
+    colors.push(color.r, color.g, color.b);
+    const cup = Math.pow(THREE.MathUtils.clamp(Math.max(Math.abs(x) / 0.34, Math.abs(y) / 0.48), 0, 1), 1.7);
+    positions.setZ(index, 0.024 * cup + Math.sin((y + 0.48) * Math.PI) * 0.004);
+  }
+  geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function makeSakuraPetals() {
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.82,
+    metalness: 0,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const petals = new THREE.InstancedMesh(makeSakuraPetalGeometry(), material, 54);
+  petals.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  petals.frustumCulled = false;
+  petals.count = 0;
+  const tint = new THREE.Color();
+  for (let index = 0; index < petals.instanceMatrix.count; index += 1) {
+    tint.setHSL(0.955 + (index % 5) * 0.004, 0.18 + (index % 4) * 0.025, 0.94 - (index % 3) * 0.018);
+    petals.setColorAt(index, tint);
+  }
+  if (petals.instanceColor) petals.instanceColor.needsUpdate = true;
+  petals.visible = false;
+  return petals;
+}
+
 function makeLeaf(source, index) {
   const leaf = source.clone(true);
   const bounds = new THREE.Box3().setFromObject(leaf);
@@ -224,18 +323,24 @@ export default function SceneWildlife({ horizon, subject, pass }) {
     const camera = new THREE.OrthographicCamera(-5 * aspect, 5 * aspect, 5, -5, 0.1, 50);
     camera.position.set(0, 0, 20);
     camera.lookAt(0, 0, 0);
+    const petalTransform = new THREE.Object3D();
     const birds = [];
     const fish = [];
+    const dolphins = [];
     const leaves = [];
     const ghosts = [];
+    const sakuraSeeds = Array.from({ length: 54 }, (_, index) => (index * 0.61803398875) % 1);
+    let sakuraPetals = null;
     let birdReady = false;
     let fishReady = false;
+    let dolphinReady = false;
     let leavesReady = false;
     let disposed = false;
     let raf = 0;
     let lastDraw = 0;
     let activeAssetId = null;
     let pendingAssetId = null;
+    let failedAssetId = null;
     let assetToken = 0;
     let assetRoots = [];
     let inView = true;
@@ -253,6 +358,7 @@ export default function SceneWildlife({ horizon, subject, pass }) {
       assetToken += 1;
       pendingAssetId = null;
       activeAssetId = null;
+      failedAssetId = null;
       for (const root of assetRoots) {
         scene.remove(root);
         disposeScene(root);
@@ -260,31 +366,50 @@ export default function SceneWildlife({ horizon, subject, pass }) {
       assetRoots = [];
       birds.length = 0;
       fish.length = 0;
+      dolphins.length = 0;
       leaves.length = 0;
       ghosts.length = 0;
+      sakuraPetals = null;
       birdReady = false;
       fishReady = false;
+      dolphinReady = false;
       leavesReady = false;
     }
 
     function eventAssetId(id) {
       if (id === 7) return 7;
+      if (id === 9) return 9;
       if (id === 10) return 10;
       if (id === 8 || id === 11) return 8;
+      if (id === 16) return 16;
       if (id === 18 || id === 27) return 18;
       return null;
     }
 
     function loadEventAssets(id) {
-      if (activeAssetId === id || pendingAssetId === id) return;
+      if (activeAssetId === id || pendingAssetId === id || failedAssetId === id) return;
       clearEventAssets();
       renderer.clear();
       activeAssetId = id;
+      if (id === 16) {
+        sakuraPetals = makeSakuraPetals();
+        assetRoots.push(sakuraPetals);
+        scene.add(sakuraPetals);
+        pendingAssetId = null;
+        scheduleFrame();
+        return;
+      }
       pendingAssetId = id;
       const requestToken = assetToken;
-      const path = id === 7 ? "/models/ghost.glb" : id === 10 ? "/models/seagull.glb" : id === 8 ? "/models/barramundi-fish.glb" : "/models/maple-leaf.glb";
+      const path = id === 7 ? "/models/ghost.glb"
+        : id === 9 ? "/models/common-bottlenose-dolphin.glb"
+          : id === 10 ? "/models/seagull.glb"
+            : id === 8 ? "/models/barramundi-fish.glb"
+              : "/models/maple-leaf.glb";
 
-      new GLTFLoader().load(path, ({ scene: source, animations }) => {
+      const loader = new GLTFLoader();
+      loader.setMeshoptDecoder(MeshoptDecoder);
+      loader.load(path, ({ scene: source, animations }) => {
         if (disposed || requestToken !== assetToken || eventAssetId(passRef.current?.id) !== id) {
           disposeScene(source);
           return;
@@ -295,6 +420,15 @@ export default function SceneWildlife({ horizon, subject, pass }) {
           ghosts.push(ghost);
           assetRoots.push(ghost);
           scene.add(ghost);
+        } else if (id === 9) {
+          for (let index = 0; index < 3; index += 1) {
+            const dolphin = makeDolphin(source);
+            dolphin.userData.flockIndex = index;
+            dolphins.push(dolphin);
+            assetRoots.push(dolphin);
+            scene.add(dolphin);
+          }
+          dolphinReady = true;
         } else if (id === 10) {
           for (let index = 0; index < 3; index++) {
             const bird = makeBird(source);
@@ -314,7 +448,7 @@ export default function SceneWildlife({ horizon, subject, pass }) {
           }
           fishReady = true;
         } else {
-          for (let index = 0; index < 20; index++) {
+          for (let index = 0; index < 40; index++) {
             const leaf = makeLeaf(source, index);
             leaves.push(leaf);
             assetRoots.push(leaf);
@@ -326,7 +460,8 @@ export default function SceneWildlife({ horizon, subject, pass }) {
       }, undefined, (error) => {
         if (requestToken === assetToken) {
           pendingAssetId = null;
-          activeAssetId = null;
+          activeAssetId = id;
+          failedAssetId = id;
           console.error(`Unable to load event model ${path}`, error);
         }
       });
@@ -565,7 +700,7 @@ export default function SceneWildlife({ horizon, subject, pass }) {
           const reveal = jump ? ease((cycleAge - 0.8) / 0.75) : ease(cycleAge / 0.8);
           const fadeOut = ease((cycleDuration - cycleAge) / 0.9);
           const scale = route === 0 ? 0.60 : route === 1 ? 1.08 : 1.68;
-          const diveOpacity = jump ? THREE.MathUtils.lerp(0.5, 1, arc / 0.105) : 0.56;
+          const diveOpacity = jump ? THREE.MathUtils.lerp(0.58, 1, arc / 0.105) : 0.72;
           swimmer.position.copy(screenPosition(x + Math.sin(cycleAge * 1.8 + index) * 0.008, surfaceY - arc));
           swimmer.position.z = 0.45;
           swimmer.scale.set(scale * Math.max(reveal * fadeOut, 0.001));
@@ -576,12 +711,88 @@ export default function SceneWildlife({ horizon, subject, pass }) {
         });
       }
 
+      if (dolphinReady) {
+        const activeDolphinEvent = current?.id === 9 && age >= 0 && age < duration;
+        const level = current?.level || 1;
+        const count = activeDolphinEvent ? [1, 2, 3][level - 1] : 0;
+        const direction = current?.direction || 1;
+        dolphins.forEach((dolphin, index) => {
+          const phase = cycleAge - index * 1.1;
+          const shown = index < count && phase >= 0 && phase < 4.9;
+          dolphin.visible = shown;
+          if (!shown) return;
+          const progress = THREE.MathUtils.clamp((phase - 0.12) / 3.05, 0, 1);
+          const arc = Math.sin(progress * Math.PI);
+          const startX = direction > 0 ? -0.16 : 1.16;
+          const endX = direction > 0 ? 0.78 - index * 0.07 : 0.22 + index * 0.07;
+          const x = THREE.MathUtils.lerp(startX, endX, progress);
+          const y = horizon + 0.055 + index * 0.012 - arc * (0.095 + index * 0.008);
+          const scale = [0.19, 0.24, 0.29][Math.min(index, 2)];
+          const visibility = Math.min(ease(phase / 0.28), ease((4.9 - phase) / 0.55));
+          dolphin.position.copy(screenPosition(x, y));
+          dolphin.position.z = 0.74 + index * 0.015;
+          dolphin.scale.setScalar(scale * visibility);
+          dolphin.rotation.y = direction > 0 ? 0 : Math.PI;
+          dolphin.rotation.z = direction * (0.18 * (1 - progress) - 0.22 * progress) * arc;
+          dolphin.userData.dolphinMaterials?.forEach((material) => { material.opacity = visibility; });
+          dolphin.userData.setDolphinTime?.(age + index * 1.2);
+        });
+      }
+
+      if (sakuraPetals) {
+        const activeSpringEvent = current?.id === 16 && age >= 0 && age < duration;
+        const level = current?.level || 1;
+        const count = activeSpringEvent ? [28, 42, 54][level - 1] : 0;
+        const direction = current?.direction || 1;
+        const petalCycle = 32;
+        sakuraPetals.visible = activeSpringEvent;
+        sakuraPetals.count = count;
+        for (let index = 0; index < count; index += 1) {
+          const seed = sakuraSeeds[index];
+          const phaseOffset = seed * petalCycle;
+          const phase = (cycleAge + phaseOffset) % petalCycle;
+          const fallDuration = 2.5 + seed * 1.2;
+          const fall = ease(phase / fallDuration);
+          const floatAge = Math.max(0, phase - fallDuration);
+          const waterBand = ((index * 0.7548776662 + 0.17) % 1);
+          const landingY = horizon + 0.035 + waterBand * Math.max(0.02, 0.98 - horizon);
+          const startY = horizon - 0.075 - ((index * 0.438 + seed) % 1) * 0.19;
+          const loop = Math.floor((cycleAge + phaseOffset) / petalCycle);
+          const startX = ((seed * 3.71 + loop * 0.213) % 1 + 1) % 1;
+          const landingX = ((startX + direction * (0.045 + seed * 0.035)) % 1 + 1) % 1;
+          const fallSway = Math.sin(phase * (1.4 + seed) + index * 1.7);
+          const x = phase < fallDuration
+            ? startX + (landingX - startX) * fall + fallSway * 0.018 * (1 - fall)
+            : ((landingX + direction * floatAge * (0.0045 + seed * 0.006)
+              + Math.sin(floatAge * 0.48 + index) * 0.006) % 1 + 1) % 1;
+          const y = phase < fallDuration
+            ? THREE.MathUtils.lerp(startY, landingY, fall) + fallSway * 0.006 * (1 - fall)
+            : landingY + Math.sin(floatAge * 1.65 + index * 0.71) * 0.0018;
+          const depth = THREE.MathUtils.clamp((y - horizon) / Math.max(0.08, 1 - horizon), 0, 1);
+          const visibility = ease(phase / 0.42);
+          const size = (0.052 + depth * 0.16) * visibility;
+          const spin = phase < fallDuration
+            ? phase * (0.9 + seed * 1.5) + fallSway * 0.35
+            : phase * (0.10 + seed * 0.07) + Math.sin(floatAge * 0.35 + index) * 0.05;
+          petalTransform.position.set((x - 0.5) * 10 * aspect, 5 - y * 10, 0.86 + depth * 0.03);
+          petalTransform.rotation.set(
+            Math.sin(spin * 0.72) * (phase < fallDuration ? 0.75 : 0.10),
+            Math.cos(spin * 0.62) * (phase < fallDuration ? 0.82 : 0.16),
+            spin,
+          );
+          petalTransform.scale.set(size, size, size);
+          petalTransform.updateMatrix();
+          sakuraPetals.setMatrixAt(index, petalTransform.matrix);
+        }
+        sakuraPetals.instanceMatrix.needsUpdate = true;
+      }
+
       if (leavesReady) {
         const autumnFall = current?.id === 18 && age >= 0 && age < duration;
         const windBurst = current?.id === 27 && age >= 0 && age < duration;
         const leafAge = cycleAge;
         const level = current?.level || 1;
-        const leafCount = autumnFall ? [4, 7, 10][level - 1] : windBurst ? [7, 13, 20][level - 1] : 0;
+        const leafCount = autumnFall ? [8, 14, 20][level - 1] : windBurst ? [7, 13, 20][level - 1] : 0;
         leaves.forEach((leaf, index) => {
           const shown = index < leafCount;
           leaf.visible = shown;
@@ -605,14 +816,23 @@ export default function SceneWildlife({ horizon, subject, pass }) {
             y = lane + Math.sin(leafAge * (1.2 + seed * 1.6) + index * 1.7) * (0.10 + seed * 0.05);
             scale = [6.5, 11.5, 17.5][index % 3] * (0.86 + seed * 0.34);
           } else {
-            const fall = ease(THREE.MathUtils.clamp((leafAge - index * 0.28) / (3.1 + seed * 0.9), 0, 1));
-            const startX = 0.08 + ((index * 0.271 + seed) % 0.84);
-            const drift = (current.direction || 1) * (0.06 + seed * 0.10) * fall;
-            x = startX + drift + Math.sin(leafAge * (1.3 + seed) + index) * (0.012 + seed * 0.014);
-            const startY = horizon - 0.16 - seed * 0.22;
-            const landingY = horizon + 0.025 + seed * 0.045;
-            y = THREE.MathUtils.lerp(startY, landingY, fall) + Math.sin(leafAge * 1.2 + index) * 0.003 * fall;
-            scale = [2.2, 5.0, 10.5][index % 3] * (0.82 + seed * 0.38);
+            const leafCycle = 18;
+            const phase = (leafAge + seed * leafCycle) % leafCycle;
+            const fallDuration = 2.8 + seed * 1.0;
+            const fall = ease(phase / fallDuration);
+            const floatAge = Math.max(0, phase - fallDuration);
+            const startX = ((seed * 2.91 + Math.floor((leafAge + seed * leafCycle) / leafCycle) * 0.19) % 1 + 1) % 1;
+            const landingX = ((startX + (current.direction || 1) * (0.04 + seed * 0.06)) % 1 + 1) % 1;
+            const landingY = horizon + 0.035 + ((index * 0.7548776662 + seed * 0.29) % 1) * Math.max(0.02, 0.98 - horizon);
+            const startY = horizon - 0.13 - seed * 0.18;
+            x = phase < fallDuration
+              ? startX + (landingX - startX) * fall + Math.sin(phase * 1.7 + index) * 0.022 * (1 - fall)
+              : ((landingX + (current.direction || 1) * floatAge * (0.004 + seed * 0.006)
+                + Math.sin(floatAge * 0.5 + index) * 0.008) % 1 + 1) % 1;
+            y = phase < fallDuration
+              ? THREE.MathUtils.lerp(startY, landingY, fall) + Math.sin(phase * 1.1 + index) * 0.006 * (1 - fall)
+              : landingY + Math.sin(floatAge * 1.45 + index) * 0.002;
+            scale = [2.2, 5.0, 10.5][index % 3] * (0.82 + seed * 0.38) * ease(phase / 0.42);
           }
           leaf.position.set((x - 0.5) * 10 * aspect, 5 - y * 10, 0.85 + seed * 0.18);
           leaf.scale.setScalar(scale * visibility);

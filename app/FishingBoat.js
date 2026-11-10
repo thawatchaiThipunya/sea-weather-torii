@@ -11,7 +11,7 @@ function makeFisher() {
   const skin = new THREE.MeshStandardMaterial({ color: 0x826c58, roughness: 1 });
   const hat = new THREE.MeshStandardMaterial({ color: 0x9a8060, roughness: 1 });
 
-  function part(geometry, material, position, scale, rotation = [0, 0, 0]) {
+  function part(geometry, material, position, scale = [1, 1, 1], rotation = [0, 0, 0]) {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.set(...position);
     mesh.scale.set(...scale);

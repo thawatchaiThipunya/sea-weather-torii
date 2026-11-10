@@ -111,6 +111,7 @@ export default function Home() {
                 <li><a href="https://svs.gsfc.nasa.gov/4720/" target="_blank" rel="noreferrer">พื้นผิวดวงจันทร์ · NASA / LRO</a></li>
                 <li><a href="https://www.innerscene.com/tools/library/3d-parts/fishing-boat-3c5a6bfd" target="_blank" rel="noreferrer">เรือประมง 3D · CC0</a></li>
                 <li><a href="https://github.com/KhronosGroup/glTF-Sample-Assets/blob/main/Models/BarramundiFish/README.md" target="_blank" rel="noreferrer">ปลา Barramundi 3D · Khronos · CC0</a></li>
+                <li><a href="https://www.innerscene.com/tools/library/3d-parts/common-bottlenose-dolphin-a7f74d0e" target="_blank" rel="noreferrer">โลมาปากขวด 3D · Innerscene · CC0</a></li>
                 <li><a href="https://www.innerscene.com/tools/library/3d-parts/seagull-dc308258" target="_blank" rel="noreferrer">นกนางนวล 3D · CC0</a></li>
                 <li><a href="https://www.innerscene.com/tools/library/3d-parts/maple-street-tree-detailed-leaves-006cddf4" target="_blank" rel="noreferrer">ใบเมเปิล 3D (แยกจากโมเดลต้นฉบับ) · CC0</a></li>
                 <li><a href="https://poly.pizza/m/Iip30bDHmu" target="_blank" rel="noreferrer">ผีน้อย 3D · Quaternius · CC0</a></li>

@@ -72,9 +72,9 @@ const randomEvents = [
   { id: 28, periods: ["day", "evening", "dusk", "night"], weight: 0.19, duration: 300 },
 ];
 
-const eventCycles = { 8: 30, 9: 26, 10: 72, 11: 30, 15: 38, 17: 19, 18: 18, 23: 32, 24: 36, 27: 24 };
+const eventCycles = { 8: 30, 9: 26, 10: 72, 11: 30, 15: 38, 16: 32, 17: 19, 18: 18, 23: 32, 24: 36, 27: 24 };
 const previewEventAges = {
-  1: 40, 2: 76, 3: 76, 5: 76, 6: 38.1, 7: 28, 9: 3.2, 11: 3.2,
+  1: 40, 2: 76, 3: 76, 5: 76, 6: 38.1, 7: 28, 8: 12, 9: 3.2, 11: 3.2,
   13: 76, 16: 22, 17: 0.7, 18: 22, 19: 22, 23: 0.9, 24: 0.9, 25: 150, 26: 150, 27: 0.7, 28: 38.1,
 };
 
@@ -118,6 +118,7 @@ uniform float u_eventTime;
 uniform float u_eventDuration;
 uniform float u_eventCycleTime;
 uniform float u_eventCycleDuration;
+uniform float u_eventDirection;
 uniform float u_boatRoute;
 uniform float u_eventVariant;
 uniform float u_eventPreview;
@@ -202,6 +203,7 @@ float waveHeight(vec2 p, float time, float wind, vec2 windDirection, out vec2 sl
   float rainChopAmplitude = 0.0018 * rain * u_eventStrength;
   float rainChop = sin(rainChopPhase) * rainChopAmplitude;
   float rainImpact = 0.0;
+  vec2 dolphinImpactSlope = vec2(0.0);
   if (rain > 0.001) {
     vec2 cell = floor(p * 0.72);
     float seed = hash21(cell);
@@ -231,15 +233,22 @@ float waveHeight(vec2 p, float time, float wind, vec2 windDirection, out vec2 sl
     rainImpact += (fishWake * (1.0 - fishJump) + fishRipple * rippleStarts) * fishLife * u_eventStrength;
   }
   float dolphinEvent = step(8.5, u_event) * (1.0 - step(9.5, u_event));
+  float dolphinProgress = clamp((u_eventCycleTime - 0.12) / 3.05, 0.0, 1.0);
+  float dolphinX = u_eventDirection > 0.0
+    ? mix(-0.16, 0.78, dolphinProgress)
+    : mix(1.16, 0.22, dolphinProgress);
   float dolphinSplashAge = u_eventCycleTime - 3.1;
   if (dolphinEvent > 0.5 && dolphinSplashAge >= 0.0 && dolphinSplashAge < 3.8) {
     float aspect = u_resolution.x / u_resolution.y;
     float depth = 1.0 / 22.2;
-    float dolphinX = 0.73 - 3.1 * 0.024;
     vec2 dolphinPoint = vec2((dolphinX - 0.5) * aspect * 22.2 * 1.6, 22.2);
     float ringFront = length(p - dolphinPoint) - dolphinSplashAge * 0.22;
     float envelope = exp(-abs(ringFront) * 5.2) * exp(-dolphinSplashAge * 0.72);
-    rainImpact += sin(ringFront * 25.0) * envelope * dolphinEvent * u_eventStrength * depth * 0.20;
+    float ringWave = sin(ringFront * 25.0);
+    float ringDerivative = (25.0 * cos(ringFront * 25.0) - 5.2 * sign(ringFront) * ringWave) * envelope;
+    rainImpact += ringWave * envelope * dolphinEvent * u_eventStrength * depth * 0.28;
+    dolphinImpactSlope += (p - dolphinPoint) / max(length(p - dolphinPoint), 0.001)
+      * ringDerivative * dolphinEvent * u_eventStrength * depth * 0.28;
   }
   float springLeaves = step(15.5, u_event) * (1.0 - step(16.5, u_event));
   float autumnLeaves = max(step(17.5, u_event) * (1.0 - step(18.5, u_event)),
@@ -247,6 +256,7 @@ float waveHeight(vec2 p, float time, float wind, vec2 windDirection, out vec2 sl
   float winterSnow = step(18.5, u_event) * (1.0 - step(19.5, u_event));
   float seasonalWake = max(max(springLeaves, autumnLeaves), winterSnow);
   float leafImpact = 0.0;
+  vec2 leafImpactSlope = vec2(0.0);
   float snowImpact = 0.0;
   if (seasonalWake > 0.001) {
     float aspect = u_resolution.x / u_resolution.y;
@@ -259,7 +269,7 @@ float waveHeight(vec2 p, float time, float wind, vec2 windDirection, out vec2 sl
       float fallDuration = 2.0 + seedY * 1.2;
       float impactAge = phase - fallDuration;
       if (impactAge >= 0.0 && impactAge < 3.2) {
-        float landingY = u_horizon + 0.025 + seedY * 0.055;
+        float landingY = u_horizon + 0.025 + seedY * max(0.025, 0.94 - u_horizon);
         float depth = max((landingY - u_horizon) / (1.0 - u_horizon), 0.045);
         float distance = 1.0 / depth;
         float flightX = fract(seedX + u_eventTime * windDirection.x * (0.006 + seedY * 0.008)
@@ -268,12 +278,17 @@ float waveHeight(vec2 p, float time, float wind, vec2 windDirection, out vec2 sl
         vec2 impactPoint = vec2((landingX - 0.5) * aspect * distance * 1.6, distance);
         float ringFront = length(p - impactPoint) - impactAge * 0.34;
         float envelope = exp(-abs(ringFront) * 4.8) * exp(-impactAge * 0.85);
-        float impactRing = sin(ringFront * 26.0) * envelope;
+        float impactWave = sin(ringFront * 26.0);
+        float impactRing = impactWave * envelope;
+        float impactDerivative = (26.0 * cos(ringFront * 26.0) - 4.8 * sign(ringFront) * impactWave) * envelope;
         leafImpact += impactRing * max(springLeaves, autumnLeaves);
+        leafImpactSlope += (p - impactPoint) / max(length(p - impactPoint), 0.001)
+          * impactDerivative * max(springLeaves, autumnLeaves);
         snowImpact += impactRing * winterSnow;
       }
     }
     leafImpact = leafImpact * u_eventStrength * 0.040;
+    leafImpactSlope = leafImpactSlope * u_eventStrength * 0.040;
     snowImpact = snowImpact * u_eventStrength * 0.012;
   }
   float boatSurfaceWake = 0.0;
@@ -301,7 +316,8 @@ float waveHeight(vec2 p, float time, float wind, vec2 windDirection, out vec2 sl
   float calmWaterMotion = 0.62;
   float windDrivenMotion = 0.80 * wind;
   slope = baseSlope * (calmWaterMotion + windDrivenMotion) * u_waveStrength
-    + pointerSlope + fineDirection * (18.0 * cos(rainChopPhase) * rainChopAmplitude);
+    + pointerSlope + dolphinImpactSlope + leafImpactSlope
+    + fineDirection * (18.0 * cos(rainChopPhase) * rainChopAmplitude);
   return (longSwell + secondarySwell + diagonalSwell + independentSwell + windLines + crossChop + smallChop)
       * (calmWaterMotion + windDrivenMotion) * u_waveStrength
     + pointerRipple + rainChop + rainImpact + leafImpact + snowImpact + boatSurfaceWake;
@@ -326,16 +342,6 @@ float birdShape(vec2 p, vec2 center, float size, float wingLift) {
 
 float eventMask(float id) {
   return 1.0 - smoothstep(0.1, 0.25, abs(u_event - id));
-}
-
-float fishShape(vec2 p, vec2 center, float size, float direction) {
-  vec2 q = p - center;
-  q.x *= direction;
-  float body = 1.0 - smoothstep(0.78, 1.0, length(vec2(q.x / size, q.y / (size * 0.34))));
-  float tailTop = segment(q, vec2(-size * 0.64, 0.0), vec2(-size * 0.94, -size * 0.24), size * 0.075);
-  float tailBottom = segment(q, vec2(-size * 0.64, 0.0), vec2(-size * 0.94, size * 0.24), size * 0.075);
-  float dorsal = segment(q, vec2(size * 0.02, -size * 0.16), vec2(-size * 0.18, -size * 0.31), size * 0.055);
-  return max(body, max(max(tailTop, tailBottom), dorsal));
 }
 
 float ellipse(vec2 p, vec2 center, vec2 radius) {
@@ -371,7 +377,6 @@ void main() {
   float overcastEvent = eventMask(5.0);
   float stormEvent = eventMask(6.0);
   float ghostEvent = eventMask(7.0);
-  float dolphinEvent = eventMask(9.0);
   float swiftEvent = eventMask(10.0);
   float gustEvent = eventMask(12.0);
   float distantRain = eventMask(13.0);
@@ -635,14 +640,6 @@ void main() {
   color += vec3(0.39, 0.56, 0.78) * lightningBolt * waterMask * 0.06;
   color = mix(color, vec3(0.73, 0.80, 0.87), lightning * 0.19 * (1.0 - waterMask));
 
-  vec2 lakePoint = vec2(skyPoint.x * aspect, skyPoint.y);
-  float dolphinArc = sin(clamp(u_eventCycleTime / 3.1, 0.0, 1.0) * 3.14159);
-  float dolphinX = 0.73 - u_eventCycleTime * 0.024;
-  float dolphinY = u_horizon + 0.010 - dolphinArc * 0.060;
-  float dolphin = fishShape(lakePoint, vec2(dolphinX * aspect, dolphinY), 0.023, 1.0);
-  dolphin = max(dolphin, fishShape(lakePoint, vec2((dolphinX - 0.12) * aspect, dolphinY + 0.014), 0.016, 1.0) * 0.72);
-  color = mix(color, vec3(0.075, 0.14, 0.17), dolphin * dolphinEvent * u_eventStrength * 0.38);
-
   float auroraNoise = 0.5;
   if (auroraEvent > 0.001) auroraNoise = fbm(vec2(v_uv.x * 3.5 + ambientTime * 0.025, v_uv.y * 2.2 + ambientTime * 0.012));
   float auroraWave = sin(v_uv.x * 18.0 + ambientTime * 0.16 + auroraNoise * 2.4) * 0.024;
@@ -688,49 +685,14 @@ void main() {
   color += meteorGlow * (singleMeteor + meteorShower) * waterMask * 0.022;
 
   vec2 seasonalPoint = vec2(v_uv.x * aspect, topY);
-  float blossomParticles = 0.0;
-  float autumnLeaves = 0.0;
   float snowParticles = 0.0;
-  if (springEvent + autumnEvent + leafStormEvent + winterEvent > 0.001) {
-  for (int i = 0; i < 24; i++) {
-    float index = float(i);
-    float seedX = hash21(vec2(index + 2.3, 7.1));
-    float seedY = hash21(vec2(index + 14.7, 3.2));
-    float startY = u_horizon - 0.08 - seedY * 0.18;
-    float landingY = u_horizon + 0.025 + seedY * 0.055;
-    if (springEvent + autumnEvent + leafStormEvent > 0.001) {
-      float cycle = 4.8 + seedX * 1.8;
-      float phase = mod(u_eventTime + seedX * cycle, cycle);
-      float fallDuration = 2.0 + seedY * 1.2;
-      float impactAge = max(0.0, phase - fallDuration);
-      float fallProgress = smoothstep(0.0, 1.0, clamp(phase / fallDuration, 0.0, 1.0));
-      float windDrift = u_eventTime * windDirection.x * (0.006 + seedY * 0.008);
-      float flightX = fract(seedX + windDrift + sin(u_eventTime * 0.6 + index) * 0.012);
-      float landX = fract(flightX + max(impactAge - 0.1, 0.0) * windDirection.x * (0.003 + seedX * 0.004));
-      float leafY = mix(startY, landingY, fallProgress);
-      leafY = mix(leafY, landingY + sin(impactAge * 0.9 + seedX * 6.0) * 0.0025, step(fallDuration, phase));
-      float leafX = mix(flightX, landX, step(fallDuration, phase));
-      float leafDepth = max((leafY - u_horizon) / (1.0 - u_horizon), 0.045);
-      float leafDistance = 1.0 / leafDepth;
-      vec2 leafPoint = vec2((leafX - 0.5) * aspect * leafDistance * 1.6, leafDistance);
-      float surfaceWave = sin(dot(leafPoint, windDirection) * 1.15 - u_time * 1.35) * 0.0038
-        + sin(dot(leafPoint, vec2(windDirection.x - 0.13, windDirection.y + 0.20)) * 2.35 - u_time * 2.05) * 0.0014;
-      float surfaceLift = surfaceWave * (0.25 + u_windStrength) * step(fallDuration, phase);
-      vec2 leafCenter = vec2(leafX * aspect, leafY + surfaceLift);
-      vec2 leafDelta = seasonalPoint - leafCenter;
-      float spin = phase * (1.7 + seedY * 1.4) + sin(u_eventTime * 0.8 + index) * 0.7;
-      vec2 leafRotated = vec2(cos(spin) * leafDelta.x + sin(spin) * leafDelta.y,
-                              -sin(spin) * leafDelta.x + cos(spin) * leafDelta.y);
-      vec2 leafShapePoint = leafRotated / vec2(0.0065 + leafDepth * 0.004, 0.0025 + leafDepth * 0.0015);
-      float leafBody = ellipse(leafShapePoint, vec2(0.0), vec2(1.0, 0.56));
-      float leafVein = (1.0 - smoothstep(0.025, 0.09, abs(leafShapePoint.y))) * leafBody;
-      float leafVisible = 1.0 - step(3.9, impactAge);
-      autumnLeaves = max(autumnLeaves, leafBody * leafVisible * (0.82 + leafVein * 0.18));
-      float petalSize = 0.70 + leafDepth * 0.24;
-      float petal = ellipse(leafShapePoint, vec2(0.0), vec2(petalSize, 0.54));
-      blossomParticles = max(blossomParticles, petal * leafVisible);
-    }
-    if (winterEvent > 0.001) {
+  if (winterEvent > 0.001) {
+    for (int i = 0; i < 24; i++) {
+      float index = float(i);
+      float seedX = hash21(vec2(index + 2.3, 7.1));
+      float seedY = hash21(vec2(index + 14.7, 3.2));
+      float startY = u_horizon - 0.08 - seedY * 0.18;
+      float landingY = u_horizon + 0.025 + seedY * 0.055;
       float snowSeed = hash21(vec2(index + 31.4, 9.2));
       float snowCycle = 4.5 + seedX * 1.6;
       float snowPhase = mod(u_eventTime + seedX * snowCycle, snowCycle);
@@ -755,9 +717,6 @@ void main() {
       snowParticles = max(snowParticles, clamp(snowflake, 0.0, 1.0) * snowVisible);
     }
   }
-  }
-  color += vec3(0.98, 0.72, 0.79) * blossomParticles * springEvent * particleLife * 0.64;
-  color += vec3(0.83, 0.43, 0.20) * autumnLeaves * max(autumnEvent, leafStormEvent) * particleLife * 0.72;
   color += vec3(0.91, 0.96, 1.0) * snowParticles * winterEvent * particleLife * 0.68;
 
   vec2 fireworkPoint = vec2(skyPoint.x * aspect + normal.x * 0.11 * waterMask,
@@ -964,6 +923,7 @@ export default function WaterScene({ subject, previewEvent = null }) {
       eventDuration: gl.getUniformLocation(program, "u_eventDuration"),
       eventCycleTime: gl.getUniformLocation(program, "u_eventCycleTime"),
       eventCycleDuration: gl.getUniformLocation(program, "u_eventCycleDuration"),
+      eventDirection: gl.getUniformLocation(program, "u_eventDirection"),
       boatRoute: gl.getUniformLocation(program, "u_boatRoute"),
       eventVariant: gl.getUniformLocation(program, "u_eventVariant"),
       eventPreview: gl.getUniformLocation(program, "u_eventPreview"),
@@ -1067,7 +1027,7 @@ export default function WaterScene({ subject, previewEvent = null }) {
       nextEventAt = elapsed + activeEvent.duration + 6 + Math.random() * 6;
       const eventStartedAt = now - previewAge * 1000;
       setBoatPass(selected.id === 15 ? { startedAt: eventStartedAt, duration, cycleDuration, route } : null);
-      setCreaturePass([7, 8, 10, 11, 18, 27].includes(selected.id)
+      setCreaturePass([7, 8, 9, 10, 11, 16, 18, 27].includes(selected.id)
         ? { id: selected.id, startedAt: eventStartedAt, duration, cycleDuration, route: selected.id === 10 ? birdRoute : creatureRoute, birdPattern, variant, direction, level }
         : null);
 
@@ -1163,6 +1123,7 @@ export default function WaterScene({ subject, previewEvent = null }) {
       gl.uniform1f(uniforms.eventDuration, activeEvent.duration || 1);
       gl.uniform1f(uniforms.eventCycleTime, eventAge % Math.max(activeEvent.cycleDuration || 1, 0.1));
       gl.uniform1f(uniforms.eventCycleDuration, activeEvent.cycleDuration || 1);
+      gl.uniform1f(uniforms.eventDirection, activeEvent.direction || 1);
       gl.uniform1f(uniforms.boatRoute, activeEvent.route || 0);
       gl.uniform1f(uniforms.eventVariant, activeEvent.variant || 0);
       gl.uniform1f(uniforms.eventPreview, activeEvent.preview ? 1 : 0);
