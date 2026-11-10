@@ -427,6 +427,7 @@ export default function SceneWildlife({ horizon, subject, pass }) {
           let scale = routeScale;
           let visibility = 1;
           let flap = 0;
+          let heading = 1;
           let bank = 0;
           let step = 0;
           let preen = 0;
@@ -435,6 +436,7 @@ export default function SceneWildlife({ horizon, subject, pass }) {
 
           if (reducedMotion) {
             x = toriiLanding ? 0.5 : 0.42 + index * 0.07;
+            heading = direction;
             const beamY = horizon - 0.095;
             const footOffset = bird.userData.perchFootOffset || -(bird.userData.modelSize?.y || 0.4) / 2;
             y = toriiLanding ? beamY + footOffset * scale / 10 : horizon - 0.20;
@@ -462,22 +464,23 @@ export default function SceneWildlife({ horizon, subject, pass }) {
               if (!shown) return;
               visibility = Math.min(ease(phase / 0.8), ease((64 - phase) / 1.2));
               const perchX = 0.5 + approachDirection * walk * 0.016 + Math.sin(phase * 0.31) * 0.002;
-              const approachAngle = Math.atan2(-(bodyY - entryY), 0.5 - startX);
+              const approachBank = Math.atan2(-(bodyY - entryY), Math.abs(0.5 - startX));
               const perchedDirection = overheadApproach ? (birdPattern === 2 ? 1 : -1) : approachDirection;
-              const perchHeading = perchedDirection > 0 ? 0 : Math.PI;
-              const departureAngle = Math.atan2(-(exitY - bodyY), exitX - 0.5);
+              const departureBank = Math.atan2(-(exitY - bodyY), Math.abs(exitX - 0.5));
               if (phase < 12) {
                 x = THREE.MathUtils.lerp(startX, 0.5, approach) + Math.sin(phase * 1.5 + index) * (1 - approach) * 0.009;
                 y = THREE.MathUtils.lerp(entryY, bodyY, landing)
                   - Math.sin(approach * Math.PI) * (0.035 + birdPattern * 0.008) * (1 - landing * 0.55);
-                bank = THREE.MathUtils.lerp(approachAngle, perchHeading, landing)
+                heading = approachDirection;
+                bank = THREE.MathUtils.lerp(approachBank, 0, landing)
                   + Math.sin(phase * 1.7) * 0.035 * (1 - landing);
               } else if (phase < 55) {
                 x = perchX;
                 y = bodyY + Math.sin(phase * 1.65) * 0.0014;
+                heading = perchedDirection;
                 preen = ease((phase - 29) / 0.9) * (1 - ease((phase - 33) / 1.0))
                   + ease((phase - 45) / 0.8) * (1 - ease((phase - 48) / 0.9));
-                bank = perchHeading + Math.sin(phase * 0.53) * 0.012 - preen * 0.08;
+                bank = Math.sin(phase * 0.53) * 0.012 - preen * 0.08;
                 look = Math.sin(phase * 0.37 + index) * 0.11;
                 const wingStretch = ease((phase - 24) / 0.7) * (1 - ease((phase - 27) / 0.8));
                 flap = Math.sin(phase * 12.0) * 0.34 * wingStretch;
@@ -486,7 +489,8 @@ export default function SceneWildlife({ horizon, subject, pass }) {
               } else {
                 x = THREE.MathUtils.lerp(perchX, exitX, takeoff);
                 y = THREE.MathUtils.lerp(bodyY, exitY, takeoff) - Math.sin(takeoff * Math.PI) * 0.045;
-                bank = THREE.MathUtils.lerp(perchHeading, departureAngle, takeoff);
+                heading = exitX > 0.5 ? 1 : -1;
+                bank = departureBank * takeoff;
                 tailMotion = -takeoff * 0.10;
               }
               if (phase < 13) flap = (1 - landing) * Math.sin(phase * 10.5 + index) * 0.98;
@@ -507,10 +511,11 @@ export default function SceneWildlife({ horizon, subject, pass }) {
               const pathPattern = (birdPattern + index) % 3;
               const startY = laneY + (pathPattern === 1 ? 0.10 : pathPattern === 2 ? -0.07 : 0);
               const endY = laneY + (pathPattern === 1 ? -0.07 : pathPattern === 2 ? 0.11 : 0);
+              heading = flightDirection;
               x = THREE.MathUtils.lerp(fromX, toX, path);
               y = THREE.MathUtils.lerp(startY, endY, path) - Math.sin(path * Math.PI) * (pathPattern === 0 ? 0.05 : 0.025)
                 + Math.sin(flightAge * 1.55 + index * 1.8) * 0.004;
-              bank = Math.atan2(-(endY - startY), toX - fromX) + Math.sin(flightAge * 1.35 + index) * 0.055;
+              bank = Math.atan2(-(endY - startY), Math.abs(toX - fromX)) + Math.sin(flightAge * 1.35 + index) * 0.055;
               visibility = Math.min(ease(flightAge / 0.7), ease((flightDuration - flightAge) / 1.1));
               scale = routeScale;
               flap = Math.sin(flightAge * 10.2 + index * 1.4) * 0.78;
@@ -519,7 +524,7 @@ export default function SceneWildlife({ horizon, subject, pass }) {
           }
           bird.position.copy(screenPosition(x, y));
           bird.scale.setScalar(scale * visibility);
-          bird.rotation.y = look;
+          bird.rotation.y = (heading > 0 ? 0 : Math.PI) + look;
           bird.rotation.z = bank;
           const hinges = bird.userData.wingHinges;
           if (hinges) {
