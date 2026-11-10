@@ -75,6 +75,7 @@ function disposeTree(root) {
 export default function FishingBoat({ horizon, boatPass }) {
   const canvasRef = useRef(null);
   const boatPassRef = useRef(boatPass);
+  const wakeRef = useRef(() => {});
   boatPassRef.current = boatPass;
 
   useEffect(() => {
@@ -82,8 +83,8 @@ export default function FishingBoat({ horizon, boatPass }) {
     const stage = canvas?.parentElement;
     if (!canvas || !stage) return;
 
-    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: "low-power" });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
+    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false, powerPreference: "low-power" });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1));
     renderer.setClearColor(0x000000, 0);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -104,6 +105,60 @@ export default function FishingBoat({ horizon, boatPass }) {
     let animationFrame = 0;
     let lastDraw = 0;
     let disposed = false;
+    let loadingBoat = false;
+    let loadToken = 0;
+    let inView = true;
+    let pageVisible = !document.hidden;
+
+    function canDraw() {
+      return inView && pageVisible && !disposed;
+    }
+
+    function scheduleFrame() {
+      if (!animationFrame && canDraw()) animationFrame = requestAnimationFrame(animate);
+    }
+
+    function clearBoat() {
+      loadToken += 1;
+      loadingBoat = false;
+      if (!boat) return;
+      scene.remove(boat);
+      disposeTree(boat);
+      boat = null;
+    }
+
+    function loadBoat() {
+      if (boat || loadingBoat) return;
+      loadingBoat = true;
+      const requestToken = ++loadToken;
+      new GLTFLoader().load("/models/fishing-boat.glb", ({ scene: model }) => {
+        if (disposed || requestToken !== loadToken || !boatPassRef.current) {
+          disposeTree(model);
+          return;
+        }
+        loadingBoat = false;
+        const bounds = new THREE.Box3().setFromObject(model);
+        const center = bounds.getCenter(new THREE.Vector3());
+        boatSize = bounds.getSize(new THREE.Vector3());
+        const group = new THREE.Group();
+        const shadow = new THREE.Mesh(new THREE.PlaneGeometry(boatSize.x * 0.95, boatSize.y * 0.72), makeWaterShadow());
+        shadow.position.set(0, -boatSize.y * 0.10, -boatSize.z * 0.08);
+        shadow.renderOrder = -1;
+        group.add(shadow);
+        model.position.set(-center.x, -bounds.min.y, -center.z);
+        group.add(model);
+        group.add(makeFisher());
+        boat = group;
+        boat.visible = false;
+        scene.add(boat);
+        scheduleFrame();
+      }, undefined, (error) => {
+        if (requestToken === loadToken) {
+          loadingBoat = false;
+          console.error("Unable to load fishing boat model", error);
+        }
+      });
+    }
 
     function resize() {
       const width = Math.max(1, stage.clientWidth);
@@ -113,67 +168,82 @@ export default function FishingBoat({ horizon, boatPass }) {
       camera.right = 5 * aspect;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height, false);
+      scheduleFrame();
     }
 
-    new GLTFLoader().load("/models/fishing-boat.glb", ({ scene: model }) => {
-      if (disposed) {
-        disposeTree(model);
-        return;
+    function onVisibilityChange() {
+      pageVisible = !document.hidden;
+      if (pageVisible) scheduleFrame();
+      else if (animationFrame) {
+        cancelAnimationFrame(animationFrame);
+        animationFrame = 0;
       }
-      const bounds = new THREE.Box3().setFromObject(model);
-      const center = bounds.getCenter(new THREE.Vector3());
-      boatSize = bounds.getSize(new THREE.Vector3());
-      const group = new THREE.Group();
-      const shadow = new THREE.Mesh(new THREE.PlaneGeometry(boatSize.x * 0.95, boatSize.y * 0.72), makeWaterShadow());
-      shadow.position.set(0, -boatSize.y * 0.10, -boatSize.z * 0.08);
-      shadow.renderOrder = -1;
-      group.add(shadow);
-      model.position.set(-center.x, -bounds.min.y, -center.z);
-      group.add(model);
-      group.add(makeFisher());
-      boat = group;
-      boat.visible = false;
-      scene.add(boat);
-    }, undefined, (error) => console.error("Unable to load fishing boat model", error));
+    }
+
+    const observer = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver(([entry]) => {
+      inView = entry.isIntersecting;
+      if (inView) scheduleFrame();
+      else if (animationFrame) {
+        cancelAnimationFrame(animationFrame);
+        animationFrame = 0;
+      }
+    }, { rootMargin: "120px" });
+    observer?.observe(stage);
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
     function animate(now) {
-      animationFrame = requestAnimationFrame(animate);
-      if (now - lastDraw < 34) return;
-      lastDraw = now;
+      animationFrame = 0;
+      if (!canDraw()) return;
       const pass = boatPassRef.current;
-      if (boat && pass) {
-        const age = (performance.now() - pass.startedAt) / 1000;
-        const cycleDuration = pass.cycleDuration || pass.duration;
-        const progress = Math.max(0, Math.min(1, (age % cycleDuration) / cycleDuration));
-        boat.visible = age >= 0 && age < pass.duration;
-        if (boat.visible) {
-          const route = pass.route;
-          const x = route === 0 ? -0.14 + progress * 1.28 : route === 1 ? 1.14 - progress * 1.28 : 0.19 + progress * 0.53;
-          const y = route === 0 ? horizon + 0.045 : route === 1 ? horizon + 0.245 : horizon + 0.34 - progress * 0.285;
-          const width = route === 0 ? 0.12 : route === 1 ? 0.22 : 0.25 - progress * 0.15;
-          const scale = width * 10 * aspect / Math.max(boatSize.x, 0.001);
-          boat.position.set((x - 0.5) * 10 * aspect, 5 - y * 10 + Math.sin(age * 1.7) * 0.018, 0.55);
-          boat.scale.setScalar(scale);
-          boat.rotation.y = route === 1 ? Math.PI : route === 2 ? -progress * 0.72 : Math.sin(age * 0.22) * 0.025;
-          boat.rotation.z = Math.sin(age * 1.9) * 0.016;
-        }
-      } else if (boat) {
-        boat.visible = false;
+      const age = pass ? (now - pass.startedAt) / 1000 : -1;
+      if (!pass || age < 0 || age >= pass.duration) {
+        if (boat || loadingBoat) clearBoat();
+        renderer.clear();
+        return;
       }
+      if (!boat) loadBoat();
+      if (!boat) return;
+      if (now - lastDraw < 34) {
+        scheduleFrame();
+        return;
+      }
+      lastDraw = now;
+      const cycleDuration = pass.cycleDuration || pass.duration;
+      const progress = Math.max(0, Math.min(1, (age % cycleDuration) / cycleDuration));
+      boat.visible = true;
+      const route = pass.route;
+      const x = route === 0 ? -0.14 + progress * 1.28 : route === 1 ? 1.14 - progress * 1.28 : 0.19 + progress * 0.53;
+      const y = route === 0 ? horizon + 0.045 : route === 1 ? horizon + 0.245 : horizon + 0.34 - progress * 0.285;
+      const width = route === 0 ? 0.12 : route === 1 ? 0.22 : 0.25 - progress * 0.15;
+      const scale = width * 10 * aspect / Math.max(boatSize.x, 0.001);
+      boat.position.set((x - 0.5) * 10 * aspect, 5 - y * 10 + Math.sin(age * 1.7) * 0.018, 0.55);
+      boat.scale.setScalar(scale);
+      boat.rotation.y = route === 1 ? Math.PI : route === 2 ? -progress * 0.72 : Math.sin(age * 0.22) * 0.025;
+      boat.rotation.z = Math.sin(age * 1.9) * 0.016;
       renderer.render(scene, camera);
+      scheduleFrame();
     }
 
     resize();
     window.addEventListener("resize", resize, { passive: true });
-    animationFrame = requestAnimationFrame(animate);
+    wakeRef.current = scheduleFrame;
+    scheduleFrame();
     return () => {
       disposed = true;
+      wakeRef.current = () => {};
       cancelAnimationFrame(animationFrame);
       window.removeEventListener("resize", resize);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      observer?.disconnect();
+      clearBoat();
       disposeTree(boat);
       renderer.dispose();
     };
   }, [horizon]);
+
+  useEffect(() => {
+    wakeRef.current();
+  }, [boatPass]);
 
   return <canvas ref={canvasRef} className="scene-models" aria-hidden="true" />;
 }

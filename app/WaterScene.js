@@ -938,6 +938,10 @@ export default function WaterScene({ subject, previewEvent = null }) {
     let moonMapReady = false;
     let japanReady = false;
     let imageReady = false;
+    let inView = true;
+    let pageVisible = !document.hidden;
+    let canvasWidth = 0;
+    let canvasHeight = 0;
     let waveCalmUntil = -Infinity;
     const pointerRipples = new Float32Array(16);
     let nextPointerRipple = 0;
@@ -951,6 +955,57 @@ export default function WaterScene({ subject, previewEvent = null }) {
     let lastEventAt = -Infinity;
     let nextEventAt = 8 + Math.random() * 6;
     let appliedPreviewToken = null;
+
+    function canDraw() {
+      return inView && pageVisible;
+    }
+
+    function scheduleDraw() {
+      if (!frame && canDraw()) frame = requestAnimationFrame(draw);
+    }
+
+    function resizeCanvas() {
+      const ratio = Math.min(window.devicePixelRatio || 1, 1.15);
+      const width = Math.max(1, Math.round(stage.clientWidth * ratio));
+      const height = Math.max(1, Math.round(stage.clientHeight * ratio));
+      if (canvas.width !== width || canvas.height !== height || canvasWidth !== width || canvasHeight !== height) {
+        canvas.width = width;
+        canvas.height = height;
+        canvasWidth = width;
+        canvasHeight = height;
+        gl.viewport(0, 0, width, height);
+      }
+      scheduleDraw();
+    }
+
+    function updateImageReady() {
+      imageReady = photoReady && moonMapReady && japanReady;
+      if (imageReady) scheduleDraw();
+    }
+
+    function onVisibilityChange() {
+      pageVisible = !document.hidden;
+      if (pageVisible) scheduleDraw();
+      else if (frame) {
+        cancelAnimationFrame(frame);
+        frame = 0;
+      }
+    }
+
+    const intersectionObserver = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver(([entry]) => {
+      inView = entry.isIntersecting;
+      if (inView) scheduleDraw();
+      else if (frame) {
+        cancelAnimationFrame(frame);
+        frame = 0;
+      }
+    }, { rootMargin: "120px" });
+    intersectionObserver?.observe(stage);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("resize", resizeCanvas, { passive: true });
+    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resizeCanvas);
+    resizeObserver?.observe(stage);
+    resizeCanvas();
 
     function startEvent(selected, now, level = 1 + Math.floor(Math.random() * 3), testVariant = null) {
       const elapsed = (now - startedAt) / 1000;
@@ -1002,18 +1057,8 @@ export default function WaterScene({ subject, previewEvent = null }) {
     }
 
     function draw(now) {
-      if (!imageReady) {
-        frame = requestAnimationFrame(draw);
-        return;
-      }
-      const ratio = Math.min(window.devicePixelRatio || 1, 1.6);
-      const width = Math.max(1, Math.round(stage.clientWidth * ratio));
-      const height = Math.max(1, Math.round(stage.clientHeight * ratio));
-      if (canvas.width !== width || canvas.height !== height) {
-        canvas.width = width;
-        canvas.height = height;
-      }
-      gl.viewport(0, 0, canvas.width, canvas.height);
+      frame = 0;
+      if (!canDraw() || !imageReady) return;
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.uniform1i(uniforms.photo, 0);
@@ -1023,9 +1068,9 @@ export default function WaterScene({ subject, previewEvent = null }) {
       gl.activeTexture(gl.TEXTURE2);
       gl.bindTexture(gl.TEXTURE_2D, japanTexture);
       gl.uniform1i(uniforms.japan, 2);
-      gl.uniform2f(uniforms.resolution, canvas.width, canvas.height);
+      gl.uniform2f(uniforms.resolution, canvasWidth, canvasHeight);
       gl.uniform2f(uniforms.photoSize, image.naturalWidth, image.naturalHeight);
-      gl.uniform2f(uniforms.japanSize, japan.naturalWidth, japan.naturalHeight);
+      gl.uniform2f(uniforms.japanSize, japan.naturalWidth || 1, japan.naturalHeight || 1);
       const scrollRange = document.documentElement.scrollHeight - window.innerHeight;
       const baseProgress = scrollRange > 0 ? Math.max(0, Math.min(1, window.scrollY / scrollRange)) : 0;
       let progress = baseProgress;
@@ -1093,7 +1138,7 @@ export default function WaterScene({ subject, previewEvent = null }) {
       gl.uniform1f(uniforms.waveStrength, 1.0 - pointerCalm * 0.68);
       gl.uniform4fv(uniforms.ripples, pointerRipples);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-      frame = requestAnimationFrame(draw);
+      scheduleDraw();
     }
 
     function pointerOnWater(event) {
@@ -1199,7 +1244,7 @@ export default function WaterScene({ subject, previewEvent = null }) {
       gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
       photoReady = true;
-      imageReady = photoReady && moonMapReady && japanReady;
+      updateImageReady();
     };
     image.onerror = () => console.error("Unable to load scene photo:", scene.src);
     image.src = scene.src;
@@ -1208,7 +1253,7 @@ export default function WaterScene({ subject, previewEvent = null }) {
       gl.bindTexture(gl.TEXTURE_2D, moonTexture);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, moonMap);
       moonMapReady = true;
-      imageReady = photoReady && moonMapReady && japanReady;
+      updateImageReady();
     };
     moonMap.onerror = () => {
       console.error("Unable to load lunar surface map");
@@ -1216,25 +1261,33 @@ export default function WaterScene({ subject, previewEvent = null }) {
       gl.bindTexture(gl.TEXTURE_2D, moonTexture);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([170, 170, 174, 255]));
       moonMapReady = true;
-      imageReady = photoReady && moonMapReady && japanReady;
+      updateImageReady();
     };
     moonMap.src = "/moon-map.jpg";
-    japan.onload = () => {
-      gl.activeTexture(gl.TEXTURE2);
-      gl.bindTexture(gl.TEXTURE_2D, japanTexture);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, japan);
-      japanReady = true;
-      imageReady = photoReady && moonMapReady && japanReady;
-    };
-    japan.onerror = () => {
-      console.error("Unable to load Japanese mountain photo");
+    if (subject === "torii") {
+      japan.onload = () => {
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, japanTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, japan);
+        japanReady = true;
+        updateImageReady();
+      };
+      japan.onerror = () => {
+        console.error("Unable to load Japanese mountain photo");
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, japanTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([80, 92, 110, 255]));
+        japanReady = true;
+        updateImageReady();
+      };
+      japan.src = "/japan-mountains.jpg";
+    } else {
       gl.activeTexture(gl.TEXTURE2);
       gl.bindTexture(gl.TEXTURE_2D, japanTexture);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([80, 92, 110, 255]));
       japanReady = true;
-      imageReady = photoReady && moonMapReady && japanReady;
-    };
-    japan.src = "/japan-mountains.jpg";
+      updateImageReady();
+    }
     stage.addEventListener("pointermove", onPointerMove, { passive: true });
     stage.addEventListener("pointerdown", onPointerDown, { passive: true });
     window.addEventListener("pointerup", onPointerEnd, { passive: true });
@@ -1242,10 +1295,14 @@ export default function WaterScene({ subject, previewEvent = null }) {
     window.addEventListener("wheel", onScrollGesture, { passive: true });
     window.addEventListener("touchmove", onScrollGesture, { passive: true });
     window.addEventListener("scroll", onPageScroll, { passive: true });
-    frame = requestAnimationFrame(draw);
+    scheduleDraw();
 
     return () => {
       cancelAnimationFrame(frame);
+      intersectionObserver?.disconnect();
+      resizeObserver?.disconnect();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("resize", resizeCanvas);
       image.onload = null;
       image.onerror = null;
       moonMap.onload = null;
@@ -1272,8 +1329,8 @@ export default function WaterScene({ subject, previewEvent = null }) {
   return (
     <div className="stage" ref={stageRef}>
       <canvas ref={canvasRef} className="water-canvas" style={{ backgroundImage: `url("${scene.src}")` }} aria-hidden="true" />
-      <SceneWildlife horizon={scene.horizon} subject={subject} pass={creaturePass} />
-      <FishingBoat horizon={scene.horizon} boatPass={boatPass} />
+      {creaturePass && <SceneWildlife horizon={scene.horizon} subject={subject} pass={creaturePass} />}
+      {boatPass && <FishingBoat horizon={scene.horizon} boatPass={boatPass} />}
       <div className="photo-shade" aria-hidden="true" />
     </div>
   );

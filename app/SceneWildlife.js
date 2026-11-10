@@ -96,11 +96,13 @@ function makeFish(source) {
   const center = bounds.getCenter(new THREE.Vector3());
   const size = bounds.getSize(new THREE.Vector3());
   model.position.sub(center);
-  let fishShader = null;
+  const fishShaders = [];
+  const fishMaterials = [];
 
   model.traverse((object) => {
     if (!object.isMesh) return;
     const material = object.material.clone();
+    fishMaterials.push(material);
     material.transparent = true;
     material.depthWrite = false;
     material.onBeforeCompile = (shader) => {
@@ -113,7 +115,7 @@ function makeFish(source) {
           transformed.y += sin(uFishTime * 7.2 + position.z * 13.0) * 0.014 * tailWeight;
           transformed.x += sin(uFishTime * 6.5 + position.z * 12.0) * 0.010 * tailWeight;
         `);
-      fishShader = shader;
+      fishShaders.push(shader);
     };
     material.customProgramCacheKey = () => "barramundi-tail-sway-v1";
     object.material = material;
@@ -122,9 +124,8 @@ function makeFish(source) {
   const root = new THREE.Group();
   root.add(model);
   root.userData.modelSize = size;
-  root.userData.setFishTime = (time) => {
-    if (fishShader) fishShader.uniforms.uFishTime.value = time;
-  };
+  root.userData.fishMaterials = fishMaterials;
+  root.userData.setFishTime = (time) => fishShaders.forEach((shader) => { shader.uniforms.uFishTime.value = time; });
   root.visible = false;
   return root;
 }
@@ -184,6 +185,7 @@ function makeGhost(source, animations) {
 export default function SceneWildlife({ horizon, subject, pass }) {
   const canvasRef = useRef(null);
   const passRef = useRef(pass);
+  const wakeRef = useRef(() => {});
   passRef.current = pass;
 
   useEffect(() => {
@@ -192,8 +194,8 @@ export default function SceneWildlife({ horizon, subject, pass }) {
     if (!canvas || !stage) return;
 
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: "high-performance" });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
+    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false, powerPreference: "low-power" });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1));
     renderer.setClearColor(0x000000, 0);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -221,6 +223,103 @@ export default function SceneWildlife({ horizon, subject, pass }) {
     let disposed = false;
     let raf = 0;
     let lastDraw = 0;
+    let activeAssetId = null;
+    let pendingAssetId = null;
+    let assetToken = 0;
+    let assetRoots = [];
+    let inView = true;
+    let pageVisible = !document.hidden;
+
+    function canDraw() {
+      return inView && pageVisible && !disposed;
+    }
+
+    function scheduleFrame() {
+      if (!raf && canDraw()) raf = requestAnimationFrame(frame);
+    }
+
+    function clearEventAssets() {
+      assetToken += 1;
+      pendingAssetId = null;
+      activeAssetId = null;
+      for (const root of assetRoots) {
+        scene.remove(root);
+        disposeScene(root);
+      }
+      assetRoots = [];
+      birds.length = 0;
+      fish.length = 0;
+      leaves.length = 0;
+      ghosts.length = 0;
+      birdReady = false;
+      fishReady = false;
+      leavesReady = false;
+    }
+
+    function eventAssetId(id) {
+      if (id === 7) return 7;
+      if (id === 10) return 10;
+      if (id === 8 || id === 11) return 8;
+      if (id === 18 || id === 27) return 18;
+      return null;
+    }
+
+    function loadEventAssets(id) {
+      if (activeAssetId === id || pendingAssetId === id) return;
+      clearEventAssets();
+      renderer.clear();
+      activeAssetId = id;
+      pendingAssetId = id;
+      const requestToken = assetToken;
+      const path = id === 7 ? "/models/ghost.glb" : id === 10 ? "/models/seagull.glb" : id === 8 ? "/models/barramundi-fish.glb" : "/models/maple-leaf.glb";
+
+      new GLTFLoader().load(path, ({ scene: source, animations }) => {
+        if (disposed || requestToken !== assetToken || eventAssetId(passRef.current?.id) !== id) {
+          disposeScene(source);
+          return;
+        }
+        pendingAssetId = null;
+        if (id === 7) {
+          const ghost = makeGhost(source, animations);
+          ghosts.push(ghost);
+          assetRoots.push(ghost);
+          scene.add(ghost);
+        } else if (id === 10) {
+          for (let index = 0; index < 3; index++) {
+            const bird = makeBird(source);
+            bird.userData.flockIndex = index;
+            birds.push(bird);
+            assetRoots.push(bird);
+            scene.add(bird);
+          }
+          birdReady = true;
+        } else if (id === 8) {
+          for (let index = 0; index < 3; index++) {
+            const swimmer = makeFish(source);
+            swimmer.userData.flockIndex = index;
+            fish.push(swimmer);
+            assetRoots.push(swimmer);
+            scene.add(swimmer);
+          }
+          fishReady = true;
+        } else {
+          for (let index = 0; index < 20; index++) {
+            const leaf = makeLeaf(source, index);
+            leaves.push(leaf);
+            assetRoots.push(leaf);
+            scene.add(leaf);
+          }
+          leavesReady = true;
+        }
+        scheduleFrame();
+      }, undefined, (error) => {
+        if (requestToken === assetToken) {
+          pendingAssetId = null;
+          activeAssetId = null;
+          console.error(`Unable to load event model ${path}`, error);
+        }
+      });
+    }
 
     function resize() {
       const width = Math.max(1, stage.clientWidth);
@@ -230,56 +329,49 @@ export default function SceneWildlife({ horizon, subject, pass }) {
       camera.right = 5 * aspect;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height, false);
+      scheduleFrame();
     }
 
-    const loader = new GLTFLoader();
-    loader.load("/models/seagull.glb", ({ scene: source }) => {
-      if (disposed) return disposeScene(source);
-      for (let index = 0; index < 3; index++) {
-        const bird = makeBird(source);
-        bird.userData.flockIndex = index;
-        birds.push(bird);
-        scene.add(bird);
+    function onVisibilityChange() {
+      pageVisible = !document.hidden;
+      if (pageVisible) scheduleFrame();
+      else if (raf) {
+        cancelAnimationFrame(raf);
+        raf = 0;
       }
-      birdReady = true;
-    }, undefined, (error) => console.error("Unable to load seagull model", error));
+    }
 
-    loader.load("/models/barramundi-fish.glb", ({ scene: source }) => {
-      if (disposed) return disposeScene(source);
-      for (let index = 0; index < 3; index++) {
-        const swimmer = makeFish(source);
-        swimmer.userData.flockIndex = index;
-        fish.push(swimmer);
-        scene.add(swimmer);
+    const observer = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver(([entry]) => {
+      inView = entry.isIntersecting;
+      if (inView) scheduleFrame();
+      else if (raf) {
+        cancelAnimationFrame(raf);
+        raf = 0;
       }
-      fishReady = true;
-    }, undefined, (error) => console.error("Unable to load barramundi model", error));
-
-    loader.load("/models/maple-leaf.glb", ({ scene: source }) => {
-      if (disposed) return disposeScene(source);
-      for (let index = 0; index < 20; index++) {
-        const leaf = makeLeaf(source, index);
-        leaves.push(leaf);
-        scene.add(leaf);
-      }
-      leavesReady = true;
-    }, undefined, (error) => console.error("Unable to load maple leaf model", error));
-
-    loader.load("/models/ghost.glb", ({ scene: source, animations }) => {
-      if (disposed) return disposeScene(source);
-      const ghost = makeGhost(source, animations);
-      ghosts.push(ghost);
-      scene.add(ghost);
-    }, undefined, (error) => console.error("Unable to load ghost model", error));
+    }, { rootMargin: "120px" });
+    observer?.observe(stage);
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
     function frame(now) {
-      raf = requestAnimationFrame(frame);
-      if (now - lastDraw < 24) return;
+      raf = 0;
+      if (!canDraw()) return;
+      if (now - lastDraw < 24) {
+        scheduleFrame();
+        return;
+      }
       const delta = lastDraw ? Math.min((now - lastDraw) / 1000, 0.08) : 0;
       lastDraw = now;
       const current = passRef.current;
       const age = current ? (now - current.startedAt) / 1000 : -1;
       const duration = current?.duration || 1;
+      const assetId = current && age >= 0 && age < duration ? eventAssetId(current.id) : null;
+      if (!assetId) {
+        if (activeAssetId !== null || pendingAssetId !== null) clearEventAssets();
+        renderer.clear();
+        return;
+      }
+      if (activeAssetId !== assetId) loadEventAssets(assetId);
+      if (pendingAssetId !== null || activeAssetId !== assetId) return;
       const cycleDuration = current?.cycleDuration || duration;
       const cycleAge = age >= 0 ? age % cycleDuration : 0;
       const direction = current?.direction || 1;
@@ -433,11 +525,7 @@ export default function SceneWildlife({ horizon, subject, pass }) {
           swimmer.scale.set(scale * Math.max(reveal * fadeOut, 0.001));
           swimmer.rotation.y = direction > 0 ? -Math.PI / 2 : Math.PI / 2;
           swimmer.rotation.z = Math.sin(cycleAge * 2.7 + index) * 0.025 + (jump ? -arc * 2.4 : 0);
-          swimmer.traverse((object) => {
-            if (!object.isMesh) return;
-            const materials = Array.isArray(object.material) ? object.material : [object.material];
-            materials.forEach((material) => { material.opacity = diveOpacity; });
-          });
+          swimmer.userData.fishMaterials?.forEach((material) => { material.opacity = diveOpacity; });
           swimmer.userData.setFishTime?.(cycleAge + index * 0.6);
         });
       }
@@ -492,19 +580,29 @@ export default function SceneWildlife({ horizon, subject, pass }) {
       }
 
       renderer.render(scene, camera);
+      scheduleFrame();
     }
 
     resize();
     window.addEventListener("resize", resize, { passive: true });
-    raf = requestAnimationFrame(frame);
+    wakeRef.current = scheduleFrame;
+    scheduleFrame();
     return () => {
       disposed = true;
+      wakeRef.current = () => {};
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      observer?.disconnect();
+      clearEventAssets();
       disposeScene(scene);
       renderer.dispose();
     };
   }, [horizon, subject]);
+
+  useEffect(() => {
+    wakeRef.current();
+  }, [pass]);
 
   return <canvas ref={canvasRef} className="scene-models" aria-hidden="true" />;
 }
