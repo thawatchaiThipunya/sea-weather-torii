@@ -73,6 +73,10 @@ const randomEvents = [
 ];
 
 const eventCycles = { 8: 30, 9: 26, 10: 72, 11: 30, 15: 38, 17: 19, 18: 18, 23: 32, 24: 36, 27: 24 };
+const previewEventAges = {
+  1: 40, 2: 76, 3: 76, 5: 76, 6: 38.1, 7: 28, 9: 3.2, 11: 3.2,
+  13: 76, 16: 22, 17: 0.7, 18: 22, 19: 22, 23: 0.9, 24: 0.9, 25: 150, 26: 150, 27: 0.7, 28: 38.1,
+};
 
 function periodAt(progress) {
   if (progress < 0.0833) return "dawn";
@@ -116,6 +120,7 @@ uniform float u_eventCycleTime;
 uniform float u_eventCycleDuration;
 uniform float u_boatRoute;
 uniform float u_eventVariant;
+uniform float u_eventPreview;
 varying vec2 v_uv;
 
 float hash21(vec2 p) {
@@ -141,7 +146,7 @@ float fbm(vec2 p) {
   return value / 0.875;
 }
 
-float waveHeight(vec2 p, float time, float wind, vec2 windDirection) {
+float waveHeight(vec2 p, float time, float wind, vec2 windDirection, out vec2 slope) {
   vec2 acrossWind = vec2(-windDirection.y, windDirection.x);
   vec2 crossDirection = normalize(windDirection * 0.55 + acrossWind * 0.84);
   vec2 fineDirection = normalize(windDirection * 0.55 - acrossWind * 0.84);
@@ -149,30 +154,53 @@ float waveHeight(vec2 p, float time, float wind, vec2 windDirection) {
   float broadFlow = fbm(p * 0.22 + windDirection * time * 0.026 + crossDirection * time * 0.009);
   float surfaceFlow = fbm(p * 0.68 + crossDirection * time * 0.052 - windDirection * time * 0.019);
   float phaseWarp = (broadFlow - 0.5) * 2.4 + (surfaceFlow - 0.5) * 1.3;
-  float longSwell = sin(dot(p, windDirection) * 1.15 - time * 1.12 + phaseWarp) * 0.052 * (0.62 + broadFlow * 0.76);
-  float secondarySwell = sin(dot(p, crossDirection) * 2.35 - time * 1.73 + phaseWarp * 0.72 + surfaceFlow * 1.2)
-    * 0.022 * (0.66 + surfaceFlow * 0.72);
-  float diagonalSwell = sin(dot(p, diagonalDirection) * 3.08 - time * 2.34 + phaseWarp * 0.52) * 0.0085;
-  float windLines = sin(dot(p, fineDirection) * 5.8 - time * 2.79 + 2.4 + surfaceFlow * 1.5) * 0.0048;
-  float smallChop = sin(dot(p, fineDirection) * 11.5 - time * 3.87 + phaseWarp * 0.36) * 0.0012;
+  float longPhase = dot(p, windDirection) * 1.15 - time * 1.12 + phaseWarp;
+  float longAmplitude = 0.052 * (0.62 + broadFlow * 0.76);
+  float longSwell = sin(longPhase) * longAmplitude;
+  float secondaryPhase = dot(p, crossDirection) * 2.35 - time * 1.73 + phaseWarp * 0.72 + surfaceFlow * 1.2;
+  float secondaryAmplitude = 0.022 * (0.66 + surfaceFlow * 0.72);
+  float secondarySwell = sin(secondaryPhase) * secondaryAmplitude;
+  float diagonalPhase = dot(p, diagonalDirection) * 3.08 - time * 2.34 + phaseWarp * 0.52;
+  float diagonalSwell = sin(diagonalPhase) * 0.0085;
+  float windLinePhase = dot(p, fineDirection) * 5.8 - time * 2.79 + 2.4 + surfaceFlow * 1.5;
+  float windLines = sin(windLinePhase) * 0.0048;
+  float smallChopPhase = dot(p, fineDirection) * 11.5 - time * 3.87 + phaseWarp * 0.36;
+  float smallChop = sin(smallChopPhase) * 0.0012;
   vec2 counterSwellDirection = normalize(windDirection * 0.15 - acrossWind * 0.99);
-  float independentSwell = sin(dot(p, counterSwellDirection) * 0.88 - time * 0.64 + broadFlow * 2.1)
-    * 0.013 * (0.42 + broadFlow * 1.05);
-  float crossChop = sin(dot(p, crossDirection) * 4.15 - time * 2.18 + surfaceFlow * 2.6) * 0.0036;
+  float independentPhase = dot(p, counterSwellDirection) * 0.88 - time * 0.64 + broadFlow * 2.1;
+  float independentAmplitude = 0.013 * (0.42 + broadFlow * 1.05);
+  float independentSwell = sin(independentPhase) * independentAmplitude;
+  float crossChopPhase = dot(p, crossDirection) * 4.15 - time * 2.18 + surfaceFlow * 2.6;
+  float crossChop = sin(crossChopPhase) * 0.0036;
+  vec2 baseSlope = windDirection * (1.15 * cos(longPhase) * longAmplitude)
+    + crossDirection * (2.35 * cos(secondaryPhase) * secondaryAmplitude)
+    + diagonalDirection * (3.08 * cos(diagonalPhase) * 0.0085)
+    + fineDirection * (5.8 * cos(windLinePhase) * 0.0048 + 11.5 * cos(smallChopPhase) * 0.0012)
+    + counterSwellDirection * (0.88 * cos(independentPhase) * independentAmplitude)
+    + crossDirection * (4.15 * cos(crossChopPhase) * 0.0036);
   float pointerRipple = 0.0;
+  vec2 pointerSlope = vec2(0.0);
   for (int i = 0; i < 4; i++) {
     vec4 ripple = u_ripples[i];
     float rippleAge = time - ripple.z;
     if (ripple.w > 0.0 && rippleAge >= 0.0 && rippleAge < 4.6) {
-      float ringFront = length(p - ripple.xy) - rippleAge * 0.82;
+      vec2 rippleDelta = p - ripple.xy;
+      float rippleDistance = length(rippleDelta);
+      float ringFront = rippleDistance - rippleAge * 0.82;
       float ringEnvelope = exp(-abs(ringFront) * 2.8) * exp(-rippleAge * 0.58);
       float perspectiveFade = 1.0 - smoothstep(10.0, 22.0, ripple.y) * 0.45;
-      pointerRipple += sin(ringFront * 12.0) * ringEnvelope * ripple.w * 0.10 * perspectiveFade;
+      float ringWave = sin(ringFront * 12.0);
+      pointerRipple += ringWave * ringEnvelope * ripple.w * 0.10 * perspectiveFade;
+      float ringDerivative = (12.0 * cos(ringFront * 12.0) - 2.8 * sign(ringFront) * ringWave)
+        * ringEnvelope * ripple.w * 0.10 * perspectiveFade;
+      pointerSlope += rippleDelta / max(rippleDistance, 0.001) * ringDerivative;
     }
   }
   float rain = max(max(step(1.5, u_event) * (1.0 - step(2.5, u_event)), step(2.5, u_event) * (1.0 - step(3.5, u_event))),
     max(step(4.5, u_event) * (1.0 - step(6.5, u_event)), step(12.5, u_event) * (1.0 - step(13.5, u_event))));
-  float rainChop = sin(dot(p, fineDirection) * 18.0 - time * 6.3) * 0.0018 * rain * u_eventStrength;
+  float rainChopPhase = dot(p, fineDirection) * 18.0 - time * 6.3;
+  float rainChopAmplitude = 0.0018 * rain * u_eventStrength;
+  float rainChop = sin(rainChopPhase) * rainChopAmplitude;
   float rainImpact = 0.0;
   if (rain > 0.001) {
     vec2 cell = floor(p * 0.72);
@@ -248,35 +276,35 @@ float waveHeight(vec2 p, float time, float wind, vec2 windDirection) {
     leafImpact = leafImpact * u_eventStrength * 0.040;
     snowImpact = snowImpact * u_eventStrength * 0.012;
   }
-  float boatProgress = clamp(u_eventCycleTime / max(u_eventCycleDuration, 0.1), 0.0, 1.0);
-  float nearRoute = step(0.5, u_boatRoute) * (1.0 - step(1.5, u_boatRoute));
-  float departureRoute = step(1.5, u_boatRoute);
-  float boatDirection = mix(1.0, -1.0, nearRoute);
-  float boatX = mix(-0.14 + boatProgress * 1.28, 1.14 - boatProgress * 1.28, nearRoute);
-  boatX = mix(boatX, 0.19 + boatProgress * 0.53, departureRoute);
-  float boatY = mix(u_horizon + 0.045, u_horizon + 0.245, nearRoute);
-  boatY = mix(boatY, mix(u_horizon + 0.34, u_horizon + 0.055, boatProgress), departureRoute);
-  float aspect = u_resolution.x / u_resolution.y;
-  float screenX = 0.5 + p.x / max(p.y * 1.6 * aspect, 0.001);
-  float screenY = u_horizon + (1.0 - u_horizon) / max(p.y, 0.001);
-  float boatBehind = mix((boatX - screenX) * aspect * boatDirection, screenY - boatY, departureRoute);
-  float boatSide = mix(abs(screenY - boatY), abs(screenX - boatX) * aspect, departureRoute);
-  float wakeWidth = 0.006 + max(boatBehind, 0.0) * (departureRoute > 0.5 ? 0.17 : 0.23);
-  float wakeSurfaceNoise = fbm(p * 1.9 + vec2(time * 0.12, -time * 0.075));
-  float wakeVariation = (wakeSurfaceNoise - 0.5) * (0.010 + max(boatBehind, 0.0) * 0.036);
-  float wakeEdge = exp(-abs(boatSide - wakeWidth - wakeVariation) * 72.0) * (0.42 + wakeSurfaceNoise * 0.72);
-  float boatSurfaceWake = sin(boatBehind * 105.0 - time * 5.2) * wakeEdge
-    * exp(-max(boatBehind, 0.0) * 7.0) * step(0.0, boatBehind)
-    * step(14.5, u_event) * (1.0 - step(15.5, u_event)) * u_eventStrength * 0.008;
+  float boatSurfaceWake = 0.0;
+  if (u_event > 14.5 && u_event < 15.5) {
+    float boatProgress = clamp(u_eventCycleTime / max(u_eventCycleDuration, 0.1), 0.0, 1.0);
+    float nearRoute = step(0.5, u_boatRoute) * (1.0 - step(1.5, u_boatRoute));
+    float departureRoute = step(1.5, u_boatRoute);
+    float boatDirection = mix(1.0, -1.0, nearRoute);
+    float boatX = mix(-0.14 + boatProgress * 1.28, 1.14 - boatProgress * 1.28, nearRoute);
+    boatX = mix(boatX, 0.19 + boatProgress * 0.53, departureRoute);
+    float boatY = mix(u_horizon + 0.045, u_horizon + 0.245, nearRoute);
+    boatY = mix(boatY, mix(u_horizon + 0.34, u_horizon + 0.055, boatProgress), departureRoute);
+    float aspect = u_resolution.x / u_resolution.y;
+    float screenX = 0.5 + p.x / max(p.y * 1.6 * aspect, 0.001);
+    float screenY = u_horizon + (1.0 - u_horizon) / max(p.y, 0.001);
+    float boatBehind = mix((boatX - screenX) * aspect * boatDirection, screenY - boatY, departureRoute);
+    float boatSide = mix(abs(screenY - boatY), abs(screenX - boatX) * aspect, departureRoute);
+    float wakeWidth = 0.006 + max(boatBehind, 0.0) * (departureRoute > 0.5 ? 0.17 : 0.23);
+    float wakeSurfaceNoise = fbm(p * 1.9 + vec2(time * 0.12, -time * 0.075));
+    float wakeVariation = (wakeSurfaceNoise - 0.5) * (0.010 + max(boatBehind, 0.0) * 0.036);
+    float wakeEdge = exp(-abs(boatSide - wakeWidth - wakeVariation) * 72.0) * (0.42 + wakeSurfaceNoise * 0.72);
+    boatSurfaceWake = sin(boatBehind * 105.0 - time * 5.2) * wakeEdge
+      * exp(-max(boatBehind, 0.0) * 7.0) * step(0.0, boatBehind) * u_eventStrength * 0.008;
+  }
   float calmWaterMotion = 0.62;
   float windDrivenMotion = 0.80 * wind;
+  slope = baseSlope * (calmWaterMotion + windDrivenMotion) * u_waveStrength
+    + pointerSlope + fineDirection * (18.0 * cos(rainChopPhase) * rainChopAmplitude);
   return (longSwell + secondarySwell + diagonalSwell + independentSwell + windLines + crossChop + smallChop)
       * (calmWaterMotion + windDrivenMotion) * u_waveStrength
     + pointerRipple + rainChop + rainImpact + leafImpact + snowImpact + boatSurfaceWake;
-}
-
-float waterHeight(vec2 p, float time, float wind, vec2 windDirection) {
-  return waveHeight(p, time, wind, windDirection);
 }
 
 float circle(vec2 p, vec2 center, float radius, float softness) {
@@ -370,7 +398,7 @@ void main() {
     * (1.0 - smoothstep(u_eventDuration - 55.0, u_eventDuration - 15.0, u_eventTime));
   float cloudCover = clamp((overcastEvent * 0.96 + stormEvent * 1.0 + lightningOnlyEvent * 0.90 + distantRain * 0.52 + (nightRain + dayRain) * 0.42) * weatherLife, 0.0, 1.0);
   float weatherCloud = (overcastEvent * 0.82 + stormEvent * 0.94 + lightningOnlyEvent * 0.86 + distantRain * 0.34 + (nightRain + dayRain) * 0.26) * weatherLife;
-  float rainGather = smoothstep(28.0, 76.0, u_eventTime);
+  float rainGather = max(smoothstep(28.0, 76.0, u_eventTime), eventMask(6.0) * u_eventPreview);
   float rainRelease = 1.0 - smoothstep(u_eventDuration - 60.0, u_eventDuration - 20.0, u_eventTime);
   float rainfall = (nightRain * 0.34 + dayRain * 0.52 + overcastEvent * 0.60 + stormEvent * 0.92 + distantRain * 0.38) * weatherLife * rainGather * rainRelease;
   float ambientTime = u_time * (1.0 - u_reducedMotion);
@@ -380,12 +408,11 @@ void main() {
   float waterDistance = 1.0 / max(depth, 0.045);
   vec2 waterPoint = vec2((v_uv.x - 0.5) * aspect * waterDistance * 1.6, waterDistance);
   vec2 windDirection = normalize(u_windDirection);
-  float eps = 0.035;
-  float height = waterHeight(waterPoint, u_time, u_windStrength, windDirection);
-  float slopeX = (waterHeight(waterPoint + vec2(eps, 0.0), u_time, u_windStrength, windDirection)
-    - waterHeight(waterPoint - vec2(eps, 0.0), u_time, u_windStrength, windDirection)) / (2.0 * eps);
-  float slopeY = (waterHeight(waterPoint + vec2(0.0, eps), u_time, u_windStrength, windDirection)
-    - waterHeight(waterPoint - vec2(0.0, eps), u_time, u_windStrength, windDirection)) / (2.0 * eps);
+  float height = 0.0;
+  vec2 slope = vec2(0.0);
+  if (waterMask > 0.001) height = waveHeight(waterPoint, u_time, u_windStrength, windDirection, slope);
+  float slopeX = slope.x;
+  float slopeY = slope.y;
   vec2 normal = vec2(-slopeX, -slopeY) * 0.82;
   float perspective = mix(0.20, 1.18, smoothstep(0.0, 1.0, depth));
   vec2 waterDisplacement = vec2(normal.x * 0.36, -normal.y * 0.11) * perspective;
@@ -407,8 +434,11 @@ void main() {
   color = mix(color, japanSky, skyBackplate * (1.0 - gatePreserve));
   float shorelineBand = smoothstep(u_horizon - 0.055, u_horizon + 0.018, topY)
     * (1.0 - smoothstep(u_horizon + 0.115, u_horizon + 0.18, topY));
-  float mossGrain = fbm(vec2(v_uv.x * 82.0, topY * 76.0 + u_eventTime * 0.012));
-  float gateMoss = gatePreserve * shorelineBand * smoothstep(0.49, 0.75, mossGrain) * mossEvent * u_eventStrength;
+  float gateMoss = 0.0;
+  if (mossEvent > 0.001 && u_guardTorii > 0.5) {
+    float mossGrain = fbm(vec2(v_uv.x * 82.0, topY * 76.0 + u_eventTime * 0.012));
+    gateMoss = gatePreserve * shorelineBand * smoothstep(0.49, 0.75, mossGrain) * mossEvent * u_eventStrength;
+  }
   color = mix(color, vec3(0.20, 0.28, 0.17), gateMoss * 0.48);
   float reflectedTop = clamp(2.0 * u_horizon - topY, 0.0, 1.0);
   vec2 reflectedScreenUv = vec2(v_uv.x, 1.0 - reflectedTop);
@@ -431,10 +461,12 @@ void main() {
   float reflectionStrength = mix(0.82, 0.96, smoothstep(0.0, 1.0, depth));
   reflectionStrength = mix(reflectionStrength, min(1.0, reflectionStrength + 0.08), clearWaterEvent * u_eventStrength);
 
-  float algaeField = fbm(waterPoint * 0.16 + vec2(ambientTime * 0.012, -ambientTime * 0.008));
-  float algaePatches = smoothstep(0.54, 0.78, algaeField) * smoothstep(0.04, 0.36, depth);
   float algaeStrength = max(murkyWaterEvent, mossEvent * 0.24) * u_eventStrength;
-  color = mix(color, mix(color, vec3(0.22, 0.30, 0.23), 0.34 + algaeField * 0.20), waterMask * algaePatches * algaeStrength * 0.62);
+  if (algaeStrength > 0.001) {
+    float algaeField = fbm(waterPoint * 0.16 + vec2(ambientTime * 0.012, -ambientTime * 0.008));
+    float algaePatches = smoothstep(0.54, 0.78, algaeField) * smoothstep(0.04, 0.36, depth);
+    color = mix(color, mix(color, vec3(0.22, 0.30, 0.23), 0.34 + algaeField * 0.20), waterMask * algaePatches * algaeStrength * 0.62);
+  }
   color = mix(color, vec3(0.31, 0.35, 0.31), waterMask * murkyWaterEvent * u_eventStrength * 0.30);
   color = mix(color, color * vec3(1.07, 1.08, 1.06), waterMask * clearWaterEvent * u_eventStrength * 0.16);
 
@@ -570,9 +602,12 @@ void main() {
 
   float rainDepth = smoothstep(0.0, 1.0, skyPoint.y);
   float rainSpeed = mix(1.0, 4.0, rainDepth) * (1.0 + stormEvent * 0.8);
-  float rainClusterField = fbm(vec2(skyPoint.x * 4.8 - ambientTime * 0.018 * windDirection.x,
-                                    skyPoint.y * 2.7 + ambientTime * 0.009));
-  float rainClusters = smoothstep(0.43, 0.70, rainClusterField) * (0.18 + cloudMask * 1.8);
+  float rainClusters = 0.0;
+  if (rainfall > 0.001) {
+    float rainClusterField = fbm(vec2(skyPoint.x * 4.8 - ambientTime * 0.018 * windDirection.x,
+                                      skyPoint.y * 2.7 + ambientTime * 0.009));
+    rainClusters = smoothstep(0.43, 0.70, rainClusterField) * (0.18 + cloudMask * 1.8);
+  }
   vec2 rainGrid = vec2((skyPoint.x * aspect + skyPoint.y * 0.11 + (cloudA - 0.5) * 0.23) * mix(36.0, 58.0, rainDepth),
                        skyPoint.y * mix(18.0, 35.0, rainDepth) + ambientTime * rainSpeed);
   vec2 rainCell = floor(rainGrid);
@@ -608,7 +643,8 @@ void main() {
   dolphin = max(dolphin, fishShape(lakePoint, vec2((dolphinX - 0.12) * aspect, dolphinY + 0.014), 0.016, 1.0) * 0.72);
   color = mix(color, vec3(0.075, 0.14, 0.17), dolphin * dolphinEvent * u_eventStrength * 0.38);
 
-  float auroraNoise = fbm(vec2(v_uv.x * 3.5 + ambientTime * 0.025, v_uv.y * 2.2 + ambientTime * 0.012));
+  float auroraNoise = 0.5;
+  if (auroraEvent > 0.001) auroraNoise = fbm(vec2(v_uv.x * 3.5 + ambientTime * 0.025, v_uv.y * 2.2 + ambientTime * 0.012));
   float auroraWave = sin(v_uv.x * 18.0 + ambientTime * 0.16 + auroraNoise * 2.4) * 0.024;
   float auroraBand = smoothstep(0.25, 0.43, topY) * (1.0 - smoothstep(0.49 + auroraWave, 0.56 + auroraWave, topY));
   float aurora = auroraBand * auroraEvent * u_eventStrength * (0.36 + auroraNoise * 0.64);
@@ -629,20 +665,22 @@ void main() {
   float meteorFade = smoothstep(0.0, 0.08, meteorProgress) * (1.0 - smoothstep(0.87, 1.0, meteorProgress));
   float singleMeteor = (meteorTrail * 0.52 + meteorHeadGlow) * meteorFade * meteorEvent * u_eventStrength;
   float meteorShower = 0.0;
-  for (int i = 0; i < 5; i++) {
-    float index = float(i);
-    float age = u_eventCycleTime - (0.8 + index * 1.65);
-    float travel = clamp(age / 1.8, 0.0, 1.0);
-    vec2 start = vec2((0.96 - fract(index * 0.31 + u_eventVariant) * 0.42) * aspect,
-                      u_horizon - 0.18 - fract(index * 0.57 + u_eventVariant * 0.83) * 0.34);
-    vec2 end = start + vec2(-0.22 - fract(index * 0.43) * 0.18, 0.10 + fract(index * 0.37) * 0.14);
-    vec2 head = mix(start, end, travel);
-    vec2 direction = normalize(end - start);
-    vec2 tail = head - direction * (0.075 + fract(index * 0.39) * 0.09);
-    float trail = segment(meteorPoint, tail, head, 0.0007 + fract(index * 0.23) * 0.00065);
-    float glow = exp(-length(meteorPoint - head) * 128.0);
-    float fade = smoothstep(0.0, 0.12, age) * (1.0 - smoothstep(1.38, 1.82, age));
-    meteorShower += (trail * 0.48 + glow) * fade * step(0.0, age) * (1.0 - step(1.82, age));
+  if (meteorShowerEvent > 0.001) {
+    for (int i = 0; i < 5; i++) {
+      float index = float(i);
+      float age = u_eventCycleTime - (0.8 + index * 1.65);
+      float travel = clamp(age / 1.8, 0.0, 1.0);
+      vec2 start = vec2((0.96 - fract(index * 0.31 + u_eventVariant) * 0.42) * aspect,
+                        u_horizon - 0.18 - fract(index * 0.57 + u_eventVariant * 0.83) * 0.34);
+      vec2 end = start + vec2(-0.22 - fract(index * 0.43) * 0.18, 0.10 + fract(index * 0.37) * 0.14);
+      vec2 head = mix(start, end, travel);
+      vec2 direction = normalize(end - start);
+      vec2 tail = head - direction * (0.075 + fract(index * 0.39) * 0.09);
+      float trail = segment(meteorPoint, tail, head, 0.0007 + fract(index * 0.23) * 0.00065);
+      float glow = exp(-length(meteorPoint - head) * 128.0);
+      float fade = smoothstep(0.0, 0.12, age) * (1.0 - smoothstep(1.38, 1.82, age));
+      meteorShower += (trail * 0.48 + glow) * fade * step(0.0, age) * (1.0 - step(1.82, age));
+    }
   }
   meteorShower *= meteorShowerEvent * u_eventStrength;
   vec3 meteorGlow = mix(vec3(0.68, 0.80, 1.0), vec3(1.0, 0.68, 0.42), u_eventVariant);
@@ -653,13 +691,14 @@ void main() {
   float blossomParticles = 0.0;
   float autumnLeaves = 0.0;
   float snowParticles = 0.0;
+  if (springEvent + autumnEvent + leafStormEvent + winterEvent > 0.001) {
   for (int i = 0; i < 24; i++) {
     float index = float(i);
     float seedX = hash21(vec2(index + 2.3, 7.1));
     float seedY = hash21(vec2(index + 14.7, 3.2));
     float startY = u_horizon - 0.08 - seedY * 0.18;
     float landingY = u_horizon + 0.025 + seedY * 0.055;
-    if (springEvent + autumnEvent > 0.001) {
+    if (springEvent + autumnEvent + leafStormEvent > 0.001) {
       float cycle = 4.8 + seedX * 1.8;
       float phase = mod(u_eventTime + seedX * cycle, cycle);
       float fallDuration = 2.0 + seedY * 1.2;
@@ -716,6 +755,7 @@ void main() {
       snowParticles = max(snowParticles, clamp(snowflake, 0.0, 1.0) * snowVisible);
     }
   }
+  }
   color += vec3(0.98, 0.72, 0.79) * blossomParticles * springEvent * particleLife * 0.64;
   color += vec3(0.83, 0.43, 0.20) * autumnLeaves * max(autumnEvent, leafStormEvent) * particleLife * 0.72;
   color += vec3(0.91, 0.96, 1.0) * snowParticles * winterEvent * particleLife * 0.68;
@@ -724,6 +764,7 @@ void main() {
                             mix(skyPoint.y, reflectedTop, waterMask) + normal.y * 0.025 * waterMask);
   vec3 fireworksLight = vec3(0.0);
   float fireworkGlow = 0.0;
+  if (summerEvent > 0.001) {
   for (int i = 0; i < 5; i++) {
     float index = float(i);
     float shellAge = u_eventCycleTime - (0.5 + index * 2.75);
@@ -759,6 +800,7 @@ void main() {
     vec3 burstColor = mix(warm, cool, step(0.5, fract(index * 0.57 + u_eventVariant * 0.83)));
     fireworksLight += burstColor * sparks;
     fireworkGlow += shellTrail * (1.0 - smoothstep(0.78, 1.0, launch)) + shellSpark * (1.0 - smoothstep(0.82, 1.0, launch)) + bloom * burstLife;
+  }
   }
   float fireworkIntensity = summerEvent * u_eventStrength;
   color += fireworksLight * fireworkIntensity * (1.0 - waterMask) * 1.28;
@@ -839,7 +881,7 @@ export default function WaterScene({ subject, previewEvent = null }) {
   useEffect(() => {
     const stage = stageRef.current;
     const canvas = canvasRef.current;
-    const gl = canvas?.getContext("webgl", { alpha: false, antialias: false, powerPreference: "high-performance" });
+    const gl = canvas?.getContext("webgl", { alpha: false, antialias: false, powerPreference: "low-power" });
     if (!stage || !canvas || !gl) return;
 
     function compile(type, source) {
@@ -924,6 +966,7 @@ export default function WaterScene({ subject, previewEvent = null }) {
       eventCycleDuration: gl.getUniformLocation(program, "u_eventCycleDuration"),
       boatRoute: gl.getUniformLocation(program, "u_boatRoute"),
       eventVariant: gl.getUniformLocation(program, "u_eventVariant"),
+      eventPreview: gl.getUniformLocation(program, "u_eventPreview"),
     };
     const image = new Image();
     const moonMap = new Image();
@@ -946,9 +989,6 @@ export default function WaterScene({ subject, previewEvent = null }) {
     let waveCalmUntil = -Infinity;
     const pointerRipples = new Float32Array(16);
     let nextPointerRipple = 0;
-    let activePointerId = null;
-    let lastPointerRipple = null;
-    let lastHoverRipple = null;
     let gust = { startedAt: 0, strength: 0, direction: [1, 0.18] };
     let lastGustAt = -Infinity;
     let lastScrollY = window.scrollY;
@@ -966,7 +1006,7 @@ export default function WaterScene({ subject, previewEvent = null }) {
     }
 
     function resizeCanvas() {
-      const ratio = Math.min(window.devicePixelRatio || 1, 1.15);
+      const ratio = Math.min(window.devicePixelRatio || 1, 1.0);
       const width = Math.max(1, Math.round(stage.clientWidth * ratio));
       const height = Math.max(1, Math.round(stage.clientHeight * ratio));
       if (canvas.width !== width || canvas.height !== height || canvasWidth !== width || canvasHeight !== height) {
@@ -1010,20 +1050,25 @@ export default function WaterScene({ subject, previewEvent = null }) {
 
     function startEvent(selected, now, level = 1 + Math.floor(Math.random() * 3), testVariant = null) {
       const elapsed = (now - startedAt) / 1000;
-      const duration = selected.duration;
+      const isPreview = testVariant !== null;
+      const previewAge = isPreview ? (previewEventAges[selected.id] || 0) : 0;
+      const duration = selected.duration + previewAge;
       const cycleDuration = eventCycles[selected.id] || duration;
-      const route = selected.id === 15 ? Math.floor(Math.random() * 3) : 0;
-      const birdRoute = selected.id === 10 ? Math.floor(Math.random() * 3) : 0;
-      const creatureRoute = [8, 11].includes(selected.id) ? Math.floor(Math.random() * 3) : 0;
+      const route = selected.id === 15 ? (isPreview ? level - 1 : Math.floor(Math.random() * 3)) : 0;
+      const birdRoute = selected.id === 10 ? (isPreview ? level - 1 : Math.floor(Math.random() * 3)) : 0;
+      const birdPattern = selected.id === 10 ? (isPreview ? level - 1 : Math.floor(Math.random() * 4)) : 0;
+      const creatureRoute = [8, 11].includes(selected.id) ? (isPreview ? level - 1 : Math.floor(Math.random() * 3)) : 0;
       const direction = Math.random() < 0.5 ? -1 : 1;
       const variant = testVariant ?? Math.random();
-      const timeTarget = testVariant === null ? null : selected.id === 25 ? 0.25 : selected.id === 26 ? 0.82 : null;
-      activeEvent = { id: selected.id, startedAt: elapsed, duration, cycleDuration, route, birdRoute, creatureRoute, direction, level, variant, timeTarget };
+      const timeTarget = testVariant === null ? null : selected.id === 4 || selected.id === 25 ? 0.25 : selected.id === 26 ? 0.82 : null;
+      const testStrength = [0.52, 0.76, 1.0][level - 1] || 1.0;
+      activeEvent = { id: selected.id, startedAt: elapsed - previewAge, duration, cycleDuration, route, birdRoute, birdPattern, creatureRoute, direction, level, variant, timeTarget, preview: isPreview, testStrength };
       lastEventAt = now;
       nextEventAt = elapsed + activeEvent.duration + 6 + Math.random() * 6;
-      setBoatPass(selected.id === 15 ? { startedAt: now, duration, cycleDuration, route } : null);
+      const eventStartedAt = now - previewAge * 1000;
+      setBoatPass(selected.id === 15 ? { startedAt: eventStartedAt, duration, cycleDuration, route } : null);
       setCreaturePass([7, 8, 10, 11, 18, 27].includes(selected.id)
-        ? { id: selected.id, startedAt: now, duration, cycleDuration, route: selected.id === 10 ? birdRoute : creatureRoute, direction, level }
+        ? { id: selected.id, startedAt: eventStartedAt, duration, cycleDuration, route: selected.id === 10 ? birdRoute : creatureRoute, birdPattern, variant, direction, level }
         : null);
 
       if ([6, 12, 16, 18, 27].includes(selected.id)) {
@@ -1102,7 +1147,9 @@ export default function WaterScene({ subject, previewEvent = null }) {
         progress = baseProgress + (activeEvent.timeTarget - baseProgress) * timeBlend;
       }
       const eventStrength = activeEvent.id && eventAge >= 0 && eventAge < activeEvent.duration
-        ? Math.min(easeInOut(eventAge / 28), easeInOut((activeEvent.duration - eventAge) / 42)) * ((activeEvent.level || 1) / 3)
+        ? activeEvent.preview
+          ? activeEvent.testStrength * easeInOut((activeEvent.duration - eventAge) / 42)
+          : Math.min(easeInOut(eventAge / 28), easeInOut((activeEvent.duration - eventAge) / 42)) * ((activeEvent.level || 1) / 3)
         : 0;
       gl.uniform1f(uniforms.time, elapsed);
       gl.uniform1f(uniforms.progress, progress);
@@ -1118,6 +1165,7 @@ export default function WaterScene({ subject, previewEvent = null }) {
       gl.uniform1f(uniforms.eventCycleDuration, activeEvent.cycleDuration || 1);
       gl.uniform1f(uniforms.boatRoute, activeEvent.route || 0);
       gl.uniform1f(uniforms.eventVariant, activeEvent.variant || 0);
+      gl.uniform1f(uniforms.eventPreview, activeEvent.preview ? 1 : 0);
       const gustAge = (now - gust.startedAt) / 1000;
       const gustBuild = easeInOut(gustAge / 5);
       const gustRelease = 1 - easeInOut((gustAge - 12) / 16);
@@ -1166,58 +1214,11 @@ export default function WaterScene({ subject, previewEvent = null }) {
 
     function onPointerDown(event) {
       if (event.button !== 0 || (event.target instanceof Element && event.target.closest("button, a, input, textarea, select, .editor"))) return;
-      activePointerId = event.pointerId;
-      lastHoverRipple = null;
-      try {
-        stage.setPointerCapture(event.pointerId);
-      } catch {}
       const point = pointerOnWater(event);
-      if (!point) {
-        lastPointerRipple = null;
-        return;
-      }
-      lastPointerRipple = { ...point, at: performance.now() };
-      waveCalmUntil = performance.now() + 280;
-      addPointerRipple(point, performance.now(), 1.5);
-    }
-
-    function onPointerMove(event) {
+      if (!point) return;
       const now = performance.now();
-      const point = pointerOnWater(event);
-      if (event.pointerId !== activePointerId) {
-        if (activePointerId !== null || event.pointerType !== "mouse" || event.buttons !== 0) return;
-        if (!point) {
-          lastHoverRipple = null;
-          return;
-        }
-        const travel = lastHoverRipple ? Math.hypot(point.x - lastHoverRipple.x, point.y - lastHoverRipple.y) : Infinity;
-        if (lastHoverRipple && travel < 0.18 && now - lastHoverRipple.at < 100) return;
-        addPointerRipple(point, now, 0.75);
-        lastHoverRipple = { ...point, at: now };
-        return;
-      }
-      if (!point) {
-        lastPointerRipple = null;
-        return;
-      }
-      waveCalmUntil = now + 180;
-      if (!lastPointerRipple) {
-        addPointerRipple(point, now, 1.25);
-        lastPointerRipple = { ...point, at: now };
-        return;
-      }
-      const travel = Math.hypot(point.x - lastPointerRipple.x, point.y - lastPointerRipple.y);
-      if (travel < 0.24 && now - lastPointerRipple.at < 110) return;
-      addPointerRipple(point, now, 0.95);
-      lastPointerRipple = { ...point, at: now };
-    }
-
-    function onPointerEnd(event) {
-      if (event.pointerId !== activePointerId) return;
-      activePointerId = null;
-      lastPointerRipple = null;
-      lastHoverRipple = null;
-      waveCalmUntil = performance.now() + 620;
+      waveCalmUntil = now + 280;
+      addPointerRipple(point, now, 1.65);
     }
 
     function onScrollGesture(event) {
@@ -1289,10 +1290,7 @@ export default function WaterScene({ subject, previewEvent = null }) {
       japanReady = true;
       updateImageReady();
     }
-    stage.addEventListener("pointermove", onPointerMove, { passive: true });
     stage.addEventListener("pointerdown", onPointerDown, { passive: true });
-    window.addEventListener("pointerup", onPointerEnd, { passive: true });
-    window.addEventListener("pointercancel", onPointerEnd, { passive: true });
     window.addEventListener("wheel", onScrollGesture, { passive: true });
     window.addEventListener("touchmove", onScrollGesture, { passive: true });
     window.addEventListener("scroll", onPageScroll, { passive: true });
@@ -1311,10 +1309,7 @@ export default function WaterScene({ subject, previewEvent = null }) {
       moonMap.onerror = null;
       japan.onload = null;
       japan.onerror = null;
-      stage.removeEventListener("pointermove", onPointerMove);
       stage.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("pointerup", onPointerEnd);
-      window.removeEventListener("pointercancel", onPointerEnd);
       window.removeEventListener("wheel", onScrollGesture);
       window.removeEventListener("touchmove", onScrollGesture);
       window.removeEventListener("scroll", onPageScroll);

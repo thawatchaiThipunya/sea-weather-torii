@@ -39,10 +39,12 @@ function makeBird(source) {
 
   const wingParts = [];
   const footParts = [];
+  const tailParts = [];
   model.traverse((object) => {
     if (!object.isMesh) return;
     if (/wing|feather/i.test(object.name)) wingParts.push(object);
     if (/leg root|bird toe|bird claw|tarsal|interdigital|toe scale/i.test(object.name)) footParts.push(object);
+    if (/tail rectrix/i.test(object.name)) tailParts.push(object);
   });
   const hinges = [-1, 1].map((side) => {
     const hinge = new THREE.Group();
@@ -69,6 +71,11 @@ function makeBird(source) {
     feet[localCenter.z < 0 ? 0 : 1].attach(part);
   }
 
+  const tailHinge = new THREE.Group();
+  tailHinge.position.set(-size.x * 0.38, -size.y * 0.02, 0);
+  model.add(tailHinge);
+  for (const part of tailParts) tailHinge.attach(part);
+
   const jaw = model.getObjectByName("Closed lower mandible");
   let jawHinge = null;
   if (jaw) {
@@ -82,10 +89,14 @@ function makeBird(source) {
 
   const root = new THREE.Group();
   root.add(model);
+  model.updateMatrixWorld(true);
+  const perchFootOffset = new THREE.Box3().setFromObject(model).min.y;
   root.userData.wingHinges = hinges;
   root.userData.footHinges = feet;
+  root.userData.tailHinge = tailHinge;
   root.userData.jawHinge = jawHinge;
   root.userData.modelSize = size;
+  root.userData.perchFootOffset = perchFootOffset;
   root.visible = false;
   return root;
 }
@@ -403,6 +414,7 @@ export default function SceneWildlife({ horizon, subject, pass }) {
         const route = THREE.MathUtils.clamp(current?.route ?? 0, 0, 2);
         const level = current?.level ?? 1;
         const routeScale = [0.54, 0.76, 1.0][route];
+        const birdPattern = ((current?.birdPattern ?? 0) % 4 + 4) % 4;
         const count = activeBirdEvent ? Math.min(birds.length, level > 1 ? 3 : 2) : 0;
         birds.forEach((bird, index) => {
           const toriiLanding = subject === "torii" && index === 0;
@@ -418,48 +430,67 @@ export default function SceneWildlife({ horizon, subject, pass }) {
           let bank = 0;
           let step = 0;
           let preen = 0;
+          let look = 0;
+          let tailMotion = 0;
 
           if (reducedMotion) {
-            x = toriiLanding ? 0.5 + (index % 2) * 0.045 : 0.42 + index * 0.07;
-            const bodyHeight = bird.userData.modelSize?.y || 0.4;
-            y = toriiLanding ? horizon - 0.13 - bodyHeight * scale * 0.05 : horizon - 0.20;
+            x = toriiLanding ? 0.5 : 0.42 + index * 0.07;
+            const beamY = horizon - 0.095;
+            const footOffset = bird.userData.perchFootOffset || -(bird.userData.modelSize?.y || 0.4) / 2;
+            y = toriiLanding ? beamY + footOffset * scale / 10 : horizon - 0.20;
             scale = toriiLanding ? routeScale : Math.max(routeScale, 0.70);
           } else {
             if (toriiLanding) {
-              const bodyHeight = bird.userData.modelSize?.y || 0.4;
-              const beamY = horizon - 0.13;
-              const bodyY = beamY - bodyHeight * routeScale * 0.05;
-              const flyY = horizon - [0.12, 0.21, 0.30][route];
-              const startX = direction > 0 ? -0.14 : 1.14;
-              const exitX = direction > 0 ? 1.14 : -0.14;
-              const approach = THREE.MathUtils.clamp(phase / 10.5, 0, 1);
+              const beamY = horizon - 0.095;
+              const footOffset = bird.userData.perchFootOffset || -(bird.userData.modelSize?.y || 0.4) / 2;
+              const bodyY = beamY + footOffset * routeScale / 10;
+              const approachDirection = birdPattern < 2 ? direction : -direction;
+              const overheadApproach = birdPattern >= 2;
+              const startX = overheadApproach ? (birdPattern === 2 ? 0.30 : 0.70) : approachDirection > 0 ? -0.16 : 1.16;
+              const exitX = overheadApproach ? (birdPattern === 2 ? 0.42 : 0.58) : direction > 0 ? 1.14 : -0.14;
+              const entryY = overheadApproach ? horizon - 0.44 : horizon - [0.14, 0.28][birdPattern];
+              const exitY = overheadApproach ? horizon - 0.44 : horizon - 0.23;
+              const flyY = horizon - [0.14, 0.28, 0.19, 0.34][birdPattern];
+              const approach = ease(phase / 10.5);
               const landing = ease((phase - 8.5) / 3.5);
               const takeoff = ease((phase - 55) / 6);
-              const walk = ease((phase - 20) / 2) * (1 - ease((phase - 43) / 2));
+              const firstStep = ease((phase - 20) / 0.45) * (1 - ease((phase - 22) / 0.5));
+              const secondStep = ease((phase - 39) / 0.45) * (1 - ease((phase - 41) / 0.5));
+              const walk = firstStep - secondStep;
               shown = phase < 64;
               bird.visible = shown;
               if (!shown) return;
               visibility = Math.min(ease(phase / 0.8), ease((64 - phase) / 1.2));
-              const perchX = 0.5 + direction * 0.035 * ease((phase - 20) / 24) + Math.sin(phase * 0.42) * 0.003;
+              const perchX = 0.5 + approachDirection * walk * 0.016 + Math.sin(phase * 0.31) * 0.002;
+              const approachAngle = Math.atan2(-(bodyY - entryY), 0.5 - startX);
+              const perchedDirection = overheadApproach ? (birdPattern === 2 ? 1 : -1) : approachDirection;
+              const perchHeading = perchedDirection > 0 ? 0 : Math.PI;
+              const departureAngle = Math.atan2(-(exitY - bodyY), exitX - 0.5);
               if (phase < 12) {
-                x = THREE.MathUtils.lerp(startX, 0.5, approach);
-                y = THREE.MathUtils.lerp(flyY - Math.sin(approach * Math.PI) * 0.025, bodyY, landing);
+                x = THREE.MathUtils.lerp(startX, 0.5, approach) + Math.sin(phase * 1.5 + index) * (1 - approach) * 0.009;
+                y = THREE.MathUtils.lerp(entryY, bodyY, landing)
+                  - Math.sin(approach * Math.PI) * (0.035 + birdPattern * 0.008) * (1 - landing * 0.55);
+                bank = THREE.MathUtils.lerp(approachAngle, perchHeading, landing)
+                  + Math.sin(phase * 1.7) * 0.035 * (1 - landing);
               } else if (phase < 55) {
                 x = perchX;
-                const footfall = Math.abs(Math.sin((phase - 20) * 3.2));
-                y = bodyY - footfall * walk * 0.004;
+                y = bodyY + Math.sin(phase * 1.65) * 0.0014;
+                preen = ease((phase - 29) / 0.9) * (1 - ease((phase - 33) / 1.0))
+                  + ease((phase - 45) / 0.8) * (1 - ease((phase - 48) / 0.9));
+                bank = perchHeading + Math.sin(phase * 0.53) * 0.012 - preen * 0.08;
+                look = Math.sin(phase * 0.37 + index) * 0.11;
+                const wingStretch = ease((phase - 24) / 0.7) * (1 - ease((phase - 27) / 0.8));
+                flap = Math.sin(phase * 12.0) * 0.34 * wingStretch;
+                step = Math.sin((phase - 20) * 3.2) * Math.abs(walk) * 0.10;
+                tailMotion = Math.sin(phase * 0.62) * 0.035 + preen * 0.08;
               } else {
                 x = THREE.MathUtils.lerp(perchX, exitX, takeoff);
-                y = THREE.MathUtils.lerp(bodyY, flyY - 0.05, takeoff) - Math.sin(takeoff * Math.PI) * 0.035;
+                y = THREE.MathUtils.lerp(bodyY, exitY, takeoff) - Math.sin(takeoff * Math.PI) * 0.045;
+                bank = THREE.MathUtils.lerp(perchHeading, departureAngle, takeoff);
+                tailMotion = -takeoff * 0.10;
               }
-              const settlingFlap = (1 - landing) * Math.sin(phase * 11) * 0.78;
-              const restingFlap = Math.sin(phase * 0.75) * 0.035;
-              const stretch = ease((phase - 29) / 0.7) * (1 - ease((phase - 33) / 0.8));
-              const takeoffFlap = Math.sin(phase * 13) * 0.92 * takeoff;
-              flap = phase < 13 ? settlingFlap : restingFlap + Math.sin(phase * 12) * 0.55 * stretch + takeoffFlap;
-              preen = ease((phase - 29) / 0.9) * (1 - ease((phase - 34) / 0.9));
-              step = Math.sin((phase - 20) * 3.2) * walk * 0.13;
-              bank = -preen * 0.16 + Math.sin(phase * 1.3) * 0.018 + takeoff * 0.08;
+              if (phase < 13) flap = (1 - landing) * Math.sin(phase * 10.5 + index) * 0.98;
+              if (phase >= 55) flap = Math.sin(phase * 12.5 + index) * 1.05 * takeoff;
               scale = routeScale;
             } else {
               const stagger = Math.max(0, index - (subject === "torii" ? 1 : 0)) * 1.35;
@@ -468,21 +499,27 @@ export default function SceneWildlife({ horizon, subject, pass }) {
               shown = flightAge >= 0 && flightAge < flightDuration;
               bird.visible = shown;
               if (!shown) return;
-              const path = THREE.MathUtils.clamp(flightAge / 10.5, 0, 1);
-              const fromX = direction > 0 ? -0.16 : 1.16;
-              const toX = direction > 0 ? 1.16 : -0.16;
+              const path = ease(flightAge / 10.5);
+              const flightDirection = index % 2 === 0 ? direction : -direction;
+              const fromX = flightDirection > 0 ? -0.16 : 1.16;
+              const toX = flightDirection > 0 ? 1.16 : -0.16;
+              const laneY = horizon - [0.12, 0.21, 0.30][route];
+              const pathPattern = (birdPattern + index) % 3;
+              const startY = laneY + (pathPattern === 1 ? 0.10 : pathPattern === 2 ? -0.07 : 0);
+              const endY = laneY + (pathPattern === 1 ? -0.07 : pathPattern === 2 ? 0.11 : 0);
               x = THREE.MathUtils.lerp(fromX, toX, path);
-              y = horizon - [0.12, 0.21, 0.30][route] - Math.sin(path * Math.PI) * 0.035 + Math.sin(flightAge * 1.8 + index) * 0.006;
+              y = THREE.MathUtils.lerp(startY, endY, path) - Math.sin(path * Math.PI) * (pathPattern === 0 ? 0.05 : 0.025)
+                + Math.sin(flightAge * 1.55 + index * 1.8) * 0.004;
+              bank = Math.atan2(-(endY - startY), toX - fromX) + Math.sin(flightAge * 1.35 + index) * 0.055;
               visibility = Math.min(ease(flightAge / 0.7), ease((flightDuration - flightAge) / 1.1));
-              scale = Math.max(routeScale, index === 1 ? 0.82 : 0.58);
-              flap = Math.sin(flightAge * 10.8 + index * 1.4) * 0.66;
-              bank = Math.sin(flightAge * 1.4 + index) * 0.045;
-              step = -0.08;
+              scale = routeScale;
+              flap = Math.sin(flightAge * 10.2 + index * 1.4) * 0.78;
+              step = -0.045;
             }
           }
           bird.position.copy(screenPosition(x, y));
           bird.scale.setScalar(scale * visibility);
-          bird.rotation.y = direction > 0 ? 0 : Math.PI;
+          bird.rotation.y = look;
           bird.rotation.z = bank;
           const hinges = bird.userData.wingHinges;
           if (hinges) {
@@ -493,6 +530,10 @@ export default function SceneWildlife({ horizon, subject, pass }) {
           if (feet) {
             feet[0].rotation.z = step;
             feet[1].rotation.z = -step;
+          }
+          if (bird.userData.tailHinge) {
+            bird.userData.tailHinge.rotation.z = tailMotion;
+            bird.userData.tailHinge.rotation.x = Math.sin(phase * 0.46) * 0.018;
           }
           if (bird.userData.jawHinge) bird.userData.jawHinge.rotation.z = -Math.abs(Math.sin(phase * 9)) * 0.09 * preen;
         });
